@@ -7,6 +7,10 @@
 
 #include "drake/common/default_scalars.h"
 
+#include <iostream>
+#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
+#define PRINT_VARn(a) std::cout << #a":\n" << a << std::endl;
+
 namespace drake {
 namespace multibody {
 namespace contact_solvers {
@@ -129,9 +133,14 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
     // factorizations.
     double momentum_residual, momentum_scale;
     CalcStoppingCriteriaResidual(*context, &momentum_residual, &momentum_scale);
+    PRINT_VAR(stats_.optimality_criterion_reached);
+    PRINT_VAR(momentum_residual);
+    PRINT_VAR(momentum_scale);
     stats_.optimality_criterion_reached =
         momentum_residual <=
         parameters_.abs_tolerance + parameters_.rel_tolerance * momentum_scale;
+    stats_.momentum_residual.push_back(momentum_residual);
+    stats_.momentum_scale.push_back(momentum_scale);
     // TODO(amcastro-tri): consider monitoring the duality gap.
     if (stats_.optimality_criterion_reached || stats_.cost_criterion_reached) {
       converged = true;
@@ -194,6 +203,9 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
   // even instantiated and no factorizations are performed (the expensive part
   // of the computation). We report zero number of iterations.
   stats_.num_iters = k;
+
+  PRINT_VAR(stats_.num_iters);
+  PRINT_VAR(stats_.momentum_residual.size());
 
   return SapSolverStatus::kSuccess;
 }

@@ -459,8 +459,8 @@ int do_main() {
   // AddSphere("sphere", radius, mass, friction, orange, &plant);
   auto pile1 = AddObjects(FLAGS_scale_factor, &plant);
   auto pile2 = AddObjects(FLAGS_scale_factor, &plant);
-  auto pile3 = AddObjects(FLAGS_scale_factor, &plant);
-  auto pile4 = AddObjects(FLAGS_scale_factor, &plant);
+  //auto pile3 = AddObjects(FLAGS_scale_factor, &plant);
+  //auto pile4 = AddObjects(FLAGS_scale_factor, &plant);
 
   // Only box-sphere and sphere-sphere are allowed.
   if (!FLAGS_enable_box_box_collision) {
@@ -516,10 +516,10 @@ int do_main() {
   SetObjectsIntoAPile(plant, Vector3d(-length / 4, width / 4, 0), pile2,
                       &plant_context);
 
-  SetObjectsIntoAPile(plant, Vector3d(-length / 4, -width / 4, 0), pile3,
-                      &plant_context);
-  SetObjectsIntoAPile(plant, Vector3d(length / 4, -width / 4, 0), pile4,
-                      &plant_context);
+  //SetObjectsIntoAPile(plant, Vector3d(-length / 4, -width / 4, 0), pile3,
+    //                  &plant_context);
+  //SetObjectsIntoAPile(plant, Vector3d(length / 4, -width / 4, 0), pile4,
+    //                  &plant_context);
 
   auto simulator =
       MakeSimulatorFromGflags(*diagram, std::move(diagram_context));

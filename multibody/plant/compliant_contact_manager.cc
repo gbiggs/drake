@@ -21,6 +21,10 @@
 #include "drake/multibody/triangle_quadrature/gaussian_triangle_quadrature_rule.h"
 #include "drake/systems/framework/context.h"
 
+#include <iostream>
+#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
+#define PRINT_VARn(a) std::cout << #a":\n" << a << std::endl;
+
 using drake::geometry::GeometryId;
 using drake::geometry::PenetrationAsPointPair;
 using drake::math::RotationMatrix;
@@ -28,6 +32,7 @@ using drake::multibody::contact_solvers::internal::ExtractNormal;
 using drake::multibody::contact_solvers::internal::ExtractTangent;
 using drake::multibody::contact_solvers::internal::SapContactProblem;
 using drake::multibody::contact_solvers::internal::SapSolver;
+using drake::multibody::contact_solvers::internal::SapSolverParameters;
 using drake::multibody::contact_solvers::internal::SapSolverResults;
 using drake::multibody::contact_solvers::internal::SapFrictionConeConstraint;
 using drake::multibody::internal::MultibodyTreeTopology;
@@ -613,12 +618,27 @@ void CompliantContactManager<T>::DoCalcContactSolverResults(
   // Solve contact problem.
   SapSolver<T> sap;
   SapSolverResults<T> sap_results;
+  SapSolverParameters  params;
+  params.ls_alpha_max = 1.0 / params.ls_rho;
   const drake::multibody::contact_solvers::internal::SapSolverStatus status =
       sap.SolveWithGuess(sap_problem, v0, &sap_results);
   if (status !=
       drake::multibody::contact_solvers::internal::SapSolverStatus::kSuccess) {
     throw std::runtime_error("SAP solver failed.");
   }
+  const auto& stats = sap.get_statistics();
+  PRINT_VAR(stats.optimality_criterion_reached);
+  PRINT_VAR(stats.num_iters);
+
+  if (sap_problem.num_constraints() != 0) {
+    for (int i = 0; i < stats.num_iters + 1; ++i) {
+      std::cout << stats.momentum_residual[i] << " " << stats.momentum_scale[i]
+                << std::endl;
+    }
+  }
+
+  if (sap_problem.num_constraints() != 0)
+    DRAKE_DEMAND(stats.optimality_criterion_reached);
 
   const std::vector<internal::DiscreteContactPair<T>>& discrete_pairs =
       EvalDiscreteContactPairs(context);
