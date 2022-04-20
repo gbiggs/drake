@@ -86,6 +86,8 @@ class PartialPermutation {
   // in the permutation.
   bool participates(int i) const;
 
+  // Returns index i such that i_permuted = P(i), i.e. the inverse mapping from
+  // i_permuted to i.
   int domain_index(int i_permuted) const;
 
   // This method applies this permutation to the elements of x and writes them
