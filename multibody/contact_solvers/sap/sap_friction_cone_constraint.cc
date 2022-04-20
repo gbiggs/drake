@@ -6,11 +6,6 @@
 #include "drake/common/default_scalars.h"
 #include "drake/common/eigen_types.h"
 
-#include <iostream>
-#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
-#define PRINT_VARn(a) std::cout << #a":\n" << a << std::endl;
-
-
 namespace drake {
 namespace multibody {
 namespace contact_solvers {
@@ -57,8 +52,6 @@ VectorX<T> SapFrictionConeConstraint<T>::CalcBiasTerm(const T& time_step,
                                                       const T&) const {
   const T& taud = parameters_.dissipation_time_scale;
   const T vn_hat = -phi0_ / (time_step + taud);
-  PRINT_VAR(phi0_);
-  PRINT_VAR(vn_hat);
   return Vector3<T>(0, 0, vn_hat);
 }
 
@@ -79,9 +72,6 @@ VectorX<T> SapFrictionConeConstraint<T>::CalcDiagonalRegularization(
   const T Rn =
       max(beta_factor * wi, 1.0 / (time_step * k * (time_step + taud)));
   const T Rt = parameters_.sigma * wi;
-  PRINT_VAR(wi);
-  PRINT_VAR(Rt);
-  PRINT_VAR(Rn);
   return Vector3<T>(Rt, Rt, Rn);
 }
 

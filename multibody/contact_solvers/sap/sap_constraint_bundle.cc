@@ -3,11 +3,6 @@
 #include "drake/common/default_scalars.h"
 #include "drake/multibody/contact_solvers/sap/contact_problem_graph.h"
 
-#include <iostream>
-#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
-#define PRINT_VARn(a) std::cout << #a":\n" << a << std::endl;
-
-
 namespace drake {
 namespace multibody {
 namespace contact_solvers {
@@ -133,8 +128,6 @@ void SapConstraintBundle<T>::CalcUnprojectedImpulses(const VectorX<T>& vc,
   DRAKE_DEMAND(vc.size() == num_constraint_equations());
   DRAKE_DEMAND(y != nullptr);
   DRAKE_DEMAND(y->size() == num_constraint_equations());
-  PRINT_VAR(vhat_.transpose());
-  PRINT_VAR(vc.transpose());  
   *y = Rinv_.asDiagonal() * (vhat_ - vc);
 }
 

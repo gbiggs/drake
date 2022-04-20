@@ -7,10 +7,6 @@
 #include "drake/multibody/contact_solvers/block_sparse_matrix.h"
 #include "drake/multibody/contact_solvers/sap/contact_problem_graph.h"
 
-#include <iostream>
-#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
-#define PRINT_VARn(a) std::cout << #a":\n" << a << std::endl;
-
 namespace drake {
 namespace multibody {
 namespace contact_solvers {
@@ -31,11 +27,6 @@ SapModel<T>::SapModel(const SapContactProblem<T>* problem_ptr)
   PartialPermutation velocities_permutation =
       MakeParticipatingVelocitiesPermutation(problem());
   PartialPermutation impulses_permutation = MakeImpulsesPermutation(graph);
-
-  const int nc = cliques_permutation.domain_size();
-  const int nv = velocities_permutation.domain_size();
-  PRINT_VAR(Eigen::Map<const Eigen::VectorXi>(cliques_permutation.permutation().data(), nc).transpose());
-  PRINT_VAR(Eigen::Map<const Eigen::VectorXi>(velocities_permutation.permutation().data(), nv).transpose());
 
   // Extract momentum matrix for participating DOFs only.
   const int num_participating_cliques =
@@ -168,7 +159,6 @@ void SapModel<T>::CalcConstraintVelocities(const Context<T>& context,
   system_->ValidateContext(context);
   vc->resize(num_constraint_equations());
   const VectorX<T>& v = GetVelocities(context);
-  PRINT_VARn(constraints_bundle().J().MakeDenseMatrix());
   constraints_bundle().J().Multiply(v, vc);
 }
 
@@ -192,11 +182,8 @@ void SapModel<T>::CalcImpulsesCache(const Context<T>& context,
   system_->ValidateContext(context);
   cache->Resize(num_constraint_equations());
   const VectorX<T>& vc = EvalConstraintVelocities(context);
-  PRINT_VAR(vc.transpose());
   constraints_bundle().CalcUnprojectedImpulses(vc, &cache->y);
   constraints_bundle().ProjectImpulses(cache->y, &cache->gamma);
-  PRINT_VAR(cache->y.transpose());
-  PRINT_VAR(cache->gamma.transpose());
 }
 
 template <typename T>
@@ -232,9 +219,6 @@ void SapModel<T>::CalcGradientsCache(const systems::Context<T>& context,
   const VectorX<T>& gamma = EvalImpulses(context);
   constraints_bundle().J().MultiplyByTranspose(gamma, &cache->j);  // = Jᵀ⋅γ
   // Update ∇ᵥℓ = A⋅(v−v*) - Jᵀ⋅γ
-  PRINT_VAR(gamma.transpose());
-  PRINT_VAR(momentum_gain.transpose());
-  PRINT_VAR(cache->j.transpose());
   cache->cost_gradient = momentum_gain - cache->j;
 }
 

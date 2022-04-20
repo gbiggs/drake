@@ -21,10 +21,6 @@
 #include "drake/multibody/triangle_quadrature/gaussian_triangle_quadrature_rule.h"
 #include "drake/systems/framework/context.h"
 
-#include <iostream>
-#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
-#define PRINT_VARn(a) std::cout << #a":\n" << a << std::endl;
-
 using drake::geometry::GeometryId;
 using drake::geometry::PenetrationAsPointPair;
 using drake::math::RotationMatrix;
@@ -185,8 +181,6 @@ CompliantContactManager<T>::CalcContactKinematics(
                       Jv_AcBc_W.middleCols(
                           tree_topology().tree_velocities_start(treeA_index),
                           tree_topology().num_tree_velocities(treeA_index));
-      //PRINT_VAR(treeA_index);
-      //PRINT_VARn(J);
       jacobian_blocks.emplace_back(treeA_index, std::move(J));
     }
 
@@ -198,8 +192,6 @@ CompliantContactManager<T>::CalcContactKinematics(
                       Jv_AcBc_W.middleCols(
                           tree_topology().tree_velocities_start(treeB_index),
                           tree_topology().num_tree_velocities(treeB_index));
-      //PRINT_VAR(treeB_index);
-      //PRINT_VARn(J);                          
       jacobian_blocks.emplace_back(treeB_index, std::move(J));
     }
 
@@ -311,7 +303,6 @@ void CompliantContactManager<T>::CalcDiscreteContactPairs(
       num_quadrature_pairs += s.num_faces();
     }
   }
-  PRINT_VAR(num_point_pairs);
   const int num_contact_pairs = num_point_pairs + num_quadrature_pairs;
   contact_pairs->reserve(num_contact_pairs);
   if (contact_model == ContactModel::kPoint ||
@@ -352,8 +343,6 @@ void CompliantContactManager<T>::AppendDiscreteContactPairsForPointContact(
     const T tauA = GetDissipationTimeConstant(pair.id_A, inspector);
     const T tauB = GetDissipationTimeConstant(pair.id_B, inspector);
     const T tau = CombineDissipationTimeConstant(tauA, tauB);
-    PRINT_VAR(k);
-    PRINT_VAR(tau);
 
     // Combine friction coefficients.
     const double muA = GetCoulombFriction(pair.id_A, inspector);
@@ -616,8 +605,6 @@ void CompliantContactManager<T>::DoCalcContactSolverResults(
   const ContactProblemCache<T>& contact_problem_cache =
       EvalContactProblemCache(context);
   const SapContactProblem<T>& sap_problem = *contact_problem_cache.sap_problem;
-  PRINT_VAR(sap_problem.num_velocities());
-  PRINT_VAR(sap_problem.num_constraints());
 
   // We use the velocity stored in the current context as initial guess.
   const VectorX<T>& x0 =
@@ -629,29 +616,14 @@ void CompliantContactManager<T>::DoCalcContactSolverResults(
   SapSolverResults<T> sap_results;
   SapSolverParameters  params;
   params.ls_alpha_max = 1.0 / params.ls_rho;
-  params.rel_tolerance = 1e-12;
+  params.rel_tolerance = 1e-6;
   sap.set_parameters(params);
-  PRINT_VAR(v0.transpose());
   const drake::multibody::contact_solvers::internal::SapSolverStatus status =
       sap.SolveWithGuess(sap_problem, v0, &sap_results);        
   if (status !=
       drake::multibody::contact_solvers::internal::SapSolverStatus::kSuccess) {
     throw std::runtime_error("SAP solver failed.");
-  }
-  PRINT_VAR(sap_results.v.transpose());
-  const auto& stats = sap.get_statistics();
-  PRINT_VAR(stats.optimality_criterion_reached);
-  PRINT_VAR(stats.num_iters);
-
-  if (sap_problem.num_constraints() != 0) {
-    for (int i = 0; i < stats.num_iters + 1; ++i) {
-      std::cout << stats.momentum_residual[i] << " " << stats.momentum_scale[i]
-                << std::endl;
-    }
-  }
-
-  //if (sap_problem.num_constraints() != 0)
-  //  DRAKE_DEMAND(stats.optimality_criterion_reached);
+  }  
 
   const std::vector<internal::DiscreteContactPair<T>>& discrete_pairs =
       EvalDiscreteContactPairs(context);
@@ -717,7 +689,6 @@ CompliantContactManager<T>::AddContactConstraints(
 
   const std::vector<internal::DiscreteContactPair<T>>& contact_pairs =
       EvalDiscreteContactPairs(context);
-  PRINT_VAR(contact_pairs.size());
   const int num_contacts = contact_pairs.size();
 
   // Quick no-op exit.
@@ -780,8 +751,6 @@ template <typename T>
 void CompliantContactManager<T>::DoCalcDiscreteValues(
     const drake::systems::Context<T>& context,
     drake::systems::DiscreteValues<T>* updates) const {
-  std::cout << std::string(80,'*') << std::endl;
-  std::cout << std::string(80,'*') << std::endl;
   const contact_solvers::internal::ContactSolverResults<T>& results =
       this->EvalContactSolverResults(context);
 

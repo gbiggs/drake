@@ -7,10 +7,6 @@
 
 #include "drake/common/default_scalars.h"
 
-#include <iostream>
-#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
-#define PRINT_VARn(a) std::cout << #a":\n" << a << std::endl;
-
 namespace drake {
 namespace multibody {
 namespace contact_solvers {
@@ -39,11 +35,8 @@ void SapSolver<T>::PackSapSolverResults(const systems::Context<T>& context,
   // first initialize to v = v* and overwrite with the non-trivial participating
   // values in the following line.
   results->v = model_->problem().v_star();
-  PRINT_VAR(results->v.transpose());
   const VectorX<T>& v_participating = model_->GetVelocities(context);
-  PRINT_VAR(v_participating.transpose());
   model_->velocities_permutation().ApplyInverse(v_participating, &results->v);
-  PRINT_VAR(results->v.transpose());
 
   // Constraints equations are clustered (essentially their order is permuted
   // for a better sparsity structure). Therefore constraint velocities and
@@ -99,8 +92,6 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
   using std::abs;
   using std::max;
 
-  std::cout << std::string(80, '=') << std::endl;
-
   if (problem.num_constraints() == 0) {
     // In the absence of constraints the solution is trivially v = v*.
     results->Resize(problem.num_velocities(),
@@ -115,9 +106,6 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
   const int nv = model_->num_velocities();
   const int nk = model_->num_constraint_equations();
 
-  PRINT_VAR(problem.v_star().transpose());
-  PRINT_VAR(model_->v_star().transpose());
-
   // Allocate the necessary memory to work with.
   auto context = model_->MakeContext();
   auto scratch = model_->MakeContext();
@@ -130,7 +118,6 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
     Eigen::VectorBlock<VectorX<double>> v =
         model_->GetMutableVelocities(context.get());
     model_->velocities_permutation().Apply(v_guess, &v);
-    PRINT_VAR(v.transpose());
   }
 
   // Start Newton iterations.
@@ -142,9 +129,6 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
     // factorizations.
     double momentum_residual, momentum_scale;
     CalcStoppingCriteriaResidual(*context, &momentum_residual, &momentum_scale);
-    PRINT_VAR(stats_.optimality_criterion_reached);
-    PRINT_VAR(momentum_residual);
-    PRINT_VAR(momentum_scale);
     stats_.optimality_criterion_reached =
         momentum_residual <=
         parameters_.abs_tolerance + parameters_.rel_tolerance * momentum_scale;
@@ -169,7 +153,6 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
     // solve for the search direction dv.
     CalcSearchDirectionData(*context, &search_direction_data);
     const VectorX<double>& dv = search_direction_data.dv;
-    PRINT_VAR(dv.transpose());
 
     const auto [alpha, ls_iters] = PerformBackTrackingLineSearch(
         *context, search_direction_data, scratch.get());
@@ -217,9 +200,6 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
   // even instantiated and no factorizations are performed (the expensive part
   // of the computation). We report zero number of iterations.
   stats_.num_iters = k;
-
-  PRINT_VAR(stats_.num_iters);
-  PRINT_VAR(stats_.momentum_residual.size());
 
   return SapSolverStatus::kSuccess;
 }
@@ -361,10 +341,6 @@ std::pair<T, int> SapSolver<T>::PerformBackTrackingLineSearch(
 template <typename T>
 void SapSolver<T>::CallDenseSolver(const Context<T>& context,
                                    VectorX<T>* dv) const {
-  std::cout << std::string(80, '&') << std::endl;
-  std::cout << "CallDenseSolver\n";
-  std::cout << std::string(80, '&') << std::endl;
-
   // Explicitly build dense Hessian.
   // These matrices could be saved in the cache. However this method is only
   // intended as an alternative for debugging and optimizing it might not be
@@ -397,9 +373,6 @@ void SapSolver<T>::CallDenseSolver(const Context<T>& context,
 
   const MatrixX<T> H = Adense + Jdense.transpose() * Gdense * Jdense;
 
-  //PRINT_VAR(Adense);
-  //PRINT_VARn(H);
-
   // Factorize Hessian.
   // TODO(amcastro-tri): Make use of mat::SolveLinearSystem() for a quick and
   // dirty way to support AutoDiffXd, at least to build unit tests.
@@ -416,7 +389,6 @@ void SapSolver<T>::CallDenseSolver(const Context<T>& context,
 
   // Compute search direction.
   const VectorX<T> rhs = -model_->EvalCostGradient(context);
-  PRINT_VAR(rhs.transpose());
   *dv = Hldlt.solve(rhs);
 }
 
