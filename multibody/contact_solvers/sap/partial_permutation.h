@@ -86,6 +86,8 @@ class PartialPermutation {
   // in the permutation.
   bool participates(int i) const;
 
+  int domain_index(int i_permuted) const;
+
   // This method applies this permutation to the elements of x and writes them
   // into x_permuted. That is, x_permuted[permuted_index(i)] = x[i] for all
   // indexes i for which participates(i) is true.

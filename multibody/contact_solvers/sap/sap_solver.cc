@@ -202,6 +202,10 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
                             parameters_.cost_rel_tolerance * ell_scale &&
         alpha > 0.5;
 
+    //if (problem.num_constraints() == 4) {
+    //  throw std::runtime_error("Lets top here for now.");
+    //}
+
     ell_previous = ell;
   }
 
