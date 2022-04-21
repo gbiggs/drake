@@ -109,17 +109,18 @@ class Joint : public MultibodyElement<Joint, T, JointIndex> {
   ///   It must have the same size as `acc_lower_limit`.
   ///   A value equal to +∞ implies no upper limit.
   Joint(const std::string& name, const Frame<T>& frame_on_parent,
-        const Frame<T>& frame_on_child, const VectorX<double>& pos_lower_limits,
+        const Frame<T>& frame_on_child, VectorX<double> damping,
+        const VectorX<double>& pos_lower_limits,
         const VectorX<double>& pos_upper_limits,
         const VectorX<double>& vel_lower_limits,
         const VectorX<double>& vel_upper_limits,
         const VectorX<double>& acc_lower_limits,
         const VectorX<double>& acc_upper_limits)
-      : MultibodyElement<Joint, T, JointIndex>(
-        frame_on_child.model_instance()),
+      : MultibodyElement<Joint, T, JointIndex>(frame_on_child.model_instance()),
         name_(name),
         frame_on_parent_(frame_on_parent),
         frame_on_child_(frame_on_child),
+        damping_(std::move(damping)),
         pos_lower_limits_(pos_lower_limits),
         pos_upper_limits_(pos_upper_limits),
         vel_lower_limits_(vel_lower_limits),
@@ -146,6 +147,18 @@ class Joint : public MultibodyElement<Joint, T, JointIndex> {
     // intialize the default positions.
     default_positions_ = VectorX<double>::Zero(num_positions);
   }
+
+  Joint(const std::string& name, const Frame<T>& frame_on_parent,
+        const Frame<T>& frame_on_child, const VectorX<double>& pos_lower_limits,
+        const VectorX<double>& pos_upper_limits,
+        const VectorX<double>& vel_lower_limits,
+        const VectorX<double>& vel_upper_limits,
+        const VectorX<double>& acc_lower_limits,
+        const VectorX<double>& acc_upper_limits)
+      : Joint<T>(name, frame_on_parent, frame_on_child,
+                 VectorX<double>::Zero(vel_lower_limits.size()),
+                 pos_lower_limits, pos_upper_limits, vel_lower_limits,
+                 vel_upper_limits, acc_lower_limits, acc_upper_limits) {}
 
   virtual ~Joint() {}
 
@@ -427,6 +440,16 @@ class Joint : public MultibodyElement<Joint, T, JointIndex> {
   }
   /// @}
 
+  /// Returns damping coefficients 
+  /// for joints that model damping at the i-th dof as tau_i = -d_i*v_i, with
+  /// v_i and tau_i the generalized velocity and generalized force for the i-th
+  /// dof, respectively.
+  /// If the joint does not model dissipation with a model of viscous damping,
+  /// the returned vector still has size num_velocities() but it is zero.
+  const VectorX<double>& damping_vector() const {
+    return damping_;
+  }
+
   // Hide the following section from Doxygen.
 #ifndef DRAKE_DOXYGEN_CXX
   // NVI to DoCloneToScalar() templated on the scalar type of the new clone to
@@ -667,6 +690,8 @@ class Joint : public MultibodyElement<Joint, T, JointIndex> {
   std::string name_;
   const Frame<T>& frame_on_parent_;
   const Frame<T>& frame_on_child_;
+
+  VectorX<double> damping_;
 
   // Joint position limits. These vectors have zero size for joints with no
   // such limits.

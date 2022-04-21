@@ -22,6 +22,9 @@
 #include "drake/multibody/triangle_quadrature/gaussian_triangle_quadrature_rule.h"
 #include "drake/systems/framework/context.h"
 
+#include <iostream>
+#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
+
 using drake::geometry::GeometryId;
 using drake::geometry::PenetrationAsPointPair;
 using drake::math::RotationMatrix;
@@ -493,6 +496,45 @@ void CompliantContactManager<T>::
 }
 
 template <typename T>
+void CompliantContactManager<T>::
+    CalcForceElementsContributionExcludingJointDamping(
+        const systems::Context<T>& context, MultibodyForces<T>* forces) const {
+  DRAKE_DEMAND(forces != nullptr);
+  DRAKE_DEMAND(forces->CheckHasRightSizeForModel(plant()));
+  const internal::PositionKinematicsCache<T>& pc =
+      plant().EvalPositionKinematics(context);
+  const internal::VelocityKinematicsCache<T>& vc =
+      plant().EvalVelocityKinematics(context);
+
+  forces->SetZero();      
+  // TODO(amcastro-tri): revisit this code if joint damping becomes a force
+  // element in the future.
+  for (ForceElementIndex e(0); e < plant().num_force_elements(); ++e) {
+    const ForceElement<T>& force_element = plant().get_force_element(e);
+    force_element.CalcAndAddForceContribution(context, pc, vc, forces);    
+  }
+}
+
+template <typename T>
+void CompliantContactManager<T>::CalcNonContactForcesExcludingJointDamping(
+    const systems::Context<T>& context, MultibodyForces<T>* forces) const {
+  // Compute forces applied through force elements. Note that this resets
+  // forces to empty so must come first.
+  CalcForceElementsContributionExcludingJointDamping(context, forces);
+  // Add contribution from externally applied forces through input ports.
+  this->AddInForcesFromInputPorts(context, forces);
+}
+
+template <typename T>
+void CompliantContactManager<T>::CalcNonContactForcesExcludingJointLimits(
+    const systems::Context<T>& context, MultibodyForces<T>* forces) const {
+  // Compute forces applied through force elements. Note that this resets
+  // forces to empty so must come first.
+  this->CalcForceElementsContribution(context, forces);
+  this->AddInForcesFromInputPorts(context, forces);
+}
+
+template <typename T>
 void CompliantContactManager<T>::CalcAccelerationsDueToNonContactForcesCache(
     const systems::Context<T>& context,
     AccelerationsDueToExternalForcesCache<T>* no_contact_accelerations_cache)
@@ -530,21 +572,25 @@ void CompliantContactManager<T>::CalcAccelerationsDueToNonContactForcesCache(
   ScopeExit guard(
       [&evaluation_in_progress]() { evaluation_in_progress = false; });
 
-  //this->CalcNonContactForces(context,
-  //&no_contact_accelerations_cache->forces);
-  //N.B. Joint limits are modeled as constraints. Therefore here we only add all
-  //other external forces.
-  // Compute forces applied through force elements. Note that this resets
-  // forces to empty so must come first.
-  this->CalcForceElementsContribution(context,
-                                &no_contact_accelerations_cache->forces);
-  this->AddInForcesFromInputPorts(context, &no_contact_accelerations_cache->forces);
+  // N.B. Joint limits are modeled as constraints. Therefore here we only add
+  // all other external forces.
+  CalcNonContactForcesExcludingJointLimits(
+      context, &no_contact_accelerations_cache->forces);
 
+  const VectorX<T> diagonal_inertia = joint_damping_ * plant().time_step();
+
+  // We compute the articulated body inertia including the contribution of the
+  // additional diagonal elements arising from the implicit treatment of joint
+  // damping.
+  ArticulatedBodyInertiaCache<T> abic(tree_topology());
+  this->internal_tree().CalcArticulatedBodyInertiaCache(
+      context, diagonal_inertia, &abic);
+  // Once computed abic, it must be consistently included in the calls below.
   this->internal_tree().CalcArticulatedBodyForceCache(
-      context, no_contact_accelerations_cache->forces,
+      context, abic, no_contact_accelerations_cache->forces,
       &no_contact_accelerations_cache->aba_forces);
   this->internal_tree().CalcArticulatedBodyAccelerations(
-      context, no_contact_accelerations_cache->aba_forces,
+      context, abic, no_contact_accelerations_cache->aba_forces,
       &no_contact_accelerations_cache->ac);
 
   // Mark the end of the computation.
@@ -837,6 +883,18 @@ void CompliantContactManager<T>::DoCalcDiscreteValues(
   VectorX<T> x_next(plant().num_multibody_states());
   x_next << q_next, v_next;
   updates->set_value(this->multibody_state_index(), x_next);
+}
+
+template <typename T>
+void CompliantContactManager<T>::ExtractModelInfo() {
+  joint_damping_ = VectorX<T>::Zero(plant().num_velocities());
+  for(JointIndex j(0); j < plant().num_joints(); ++j) {
+    const Joint<T>& joint = plant().get_joint(j);
+    const int velocity_start = joint.velocity_start();
+    const int nv = joint.num_velocities();
+    joint_damping_.segment(velocity_start, nv) = joint.damping_vector();
+  }
+  PRINT_VAR(joint_damping_.transpose());
 }
 
 }  // namespace internal

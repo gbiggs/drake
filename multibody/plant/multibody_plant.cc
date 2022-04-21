@@ -734,6 +734,16 @@ void MultibodyPlant<T>::CalcForceElementsContribution(
       forces);
 }
 
+template <typename T>
+void MultibodyPlant<T>::CalcForceElementsContributionExcludingJointDamping(
+    const systems::Context<T>& context, MultibodyForces<T>* forces) const {
+  this->ValidateContext(context);
+  DRAKE_THROW_UNLESS(forces != nullptr);
+  DRAKE_THROW_UNLESS(forces->CheckHasRightSizeForModel(internal_tree()));
+  internal_tree().CalcForceElementsContributionExcludingJointDamping(context,
+                                                                     forces);
+}
+
 template<typename T>
 void MultibodyPlant<T>::Finalize() {
   // After finalizing the base class, tree is read-only.

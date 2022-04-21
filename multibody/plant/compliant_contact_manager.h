@@ -155,6 +155,8 @@ class CompliantContactManager final
     return internal::GetInternalTree(this->plant()).get_topology();
   }
 
+  void ExtractModelInfo() final;
+
   // TODO(amcastro-tri): Implement these methods in future PRs.
   void DoCalcAccelerationKinematicsCache(
       const systems::Context<T>&,
@@ -277,6 +279,15 @@ class CompliantContactManager final
   const ContactProblemCache<T>& EvalContactProblemCache(
       const systems::Context<T>& context) const;
 
+  void CalcForceElementsContributionExcludingJointDamping(
+      const systems::Context<T>& context, MultibodyForces<T>* forces) const;
+
+  void CalcNonContactForcesExcludingJointDamping(
+      const systems::Context<T>& context, MultibodyForces<T>* forces) const;
+
+  void CalcNonContactForcesExcludingJointLimits(
+      const systems::Context<T>& context, MultibodyForces<T>* forces) const;
+
   // Add contact constraints for the configuration stored in `context` into
   // `problem`. This method returns the orientation of the contact frame in the
   // world frame for each contact constraint added to `problem`. That is, the
@@ -305,6 +316,9 @@ class CompliantContactManager final
       const;
 
   CacheIndexes cache_indexes_;
+  // Vector of joint damping coefficients, of size plant().num_velocities().
+  // This information is extracted during the call to ExtractModelInfo().
+  VectorX<T> joint_damping_;
 };
 
 }  // namespace internal

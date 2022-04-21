@@ -1605,6 +1605,11 @@ class MultibodyTree {
       const VelocityKinematicsCache<T>& vc,
       MultibodyForces<T>* forces) const;
 
+  // See MultibodyPlant method.
+  void CalcForceElementsContributionExcludingJointDamping(
+      const systems::Context<T>& context,
+      MultibodyForces<T>* forces) const;
+
   // TODO(sherm1) Revise the comments below as #12942 is addressed.
 
   // See System method. Currently includes only gravity and explicit
@@ -1904,6 +1909,11 @@ class MultibodyTree {
    @{
   */
 
+  void CalcArticulatedBodyInertiaCache(
+      const systems::Context<T>& context,
+      const std::optional<VectorX<T>>& diagonal_inertia,
+      ArticulatedBodyInertiaCache<T>* abic) const;
+
   // Performs a tip-to-base pass to compute the ArticulatedBodyInertia for each
   // body as a function of the configuration q stored in `context`. The
   // computation is stored in `abic` along with other Articulated Body
@@ -1911,6 +1921,12 @@ class MultibodyTree {
   void CalcArticulatedBodyInertiaCache(
       const systems::Context<T>& context,
       ArticulatedBodyInertiaCache<T>* abic) const;
+
+  void CalcArticulatedBodyForceCache(
+      const systems::Context<T>& context,
+      const ArticulatedBodyInertiaCache<T>& abic,
+      const MultibodyForces<T>& forces,
+      ArticulatedBodyForceCache<T>* aba_force_cache) const;      
 
   // Performs a tip-to-base pass which essentially computes the force bias
   // terms in the ABA equations. These are a function of the full state
@@ -1920,6 +1936,12 @@ class MultibodyTree {
   void CalcArticulatedBodyForceCache(
       const systems::Context<T>& context, const MultibodyForces<T>& forces,
       ArticulatedBodyForceCache<T>* aba_force_cache) const;
+
+  void CalcArticulatedBodyAccelerations(
+      const systems::Context<T>& context,
+      const ArticulatedBodyInertiaCache<T>& abic,
+      const ArticulatedBodyForceCache<T>& aba_force_cache,
+      AccelerationKinematicsCache<T>* ac) const;
 
   // Performs the final base-to-tip pass of ABA to compute the acceleration of
   // each body in the model into output `ac`.

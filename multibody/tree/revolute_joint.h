@@ -104,6 +104,7 @@ class RevoluteJoint final : public Joint<T> {
                 double pos_lower_limit, double pos_upper_limit,
                 double damping = 0)
       : Joint<T>(name, frame_on_parent, frame_on_child,
+                 VectorX<double>::Constant(1, damping),
                  VectorX<double>::Constant(1, pos_lower_limit),
                  VectorX<double>::Constant(1, pos_upper_limit),
                  VectorX<double>::Constant(
