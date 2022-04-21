@@ -113,6 +113,14 @@ void DiscreteUpdateManager<T>::AddInForcesFromInputPorts(
 }
 
 template <typename T>
+void DiscreteUpdateManager<T>::CalcForceElementsContribution(
+    const drake::systems::Context<T>& context,
+    MultibodyForces<T>* forces) const {
+  MultibodyPlantDiscreteUpdateManagerAttorney<T>::CalcForceElementsContribution(
+      plant(), context, forces);
+}
+
+template <typename T>
 void DiscreteUpdateManager<T>::CalcNonContactForces(
     const drake::systems::Context<T>& context,
     MultibodyForces<T>* forces) const {
@@ -144,6 +152,13 @@ const std::unordered_map<geometry::GeometryId, BodyIndex>&
 DiscreteUpdateManager<T>::geometry_id_to_body_index() const {
   return MultibodyPlantDiscreteUpdateManagerAttorney<
       T>::geometry_id_to_body_index(*plant_);
+}
+
+template <typename T>
+const JointLimitsParameters&
+DiscreteUpdateManager<T>::joint_limits_parameters() const {
+  return MultibodyPlantDiscreteUpdateManagerAttorney<
+      T>::joint_limits_parameters(*plant_);
 }
 
 }  // namespace internal

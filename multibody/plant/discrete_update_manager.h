@@ -25,6 +25,7 @@ class MultibodyPlant;
 namespace internal {
 template <typename T>
 class AccelerationKinematicsCache;
+struct JointLimitsParameters;
 
 /* This class is used to perform all calculations needed to advance state for a
  MultibodyPlant with discrete state.
@@ -199,6 +200,9 @@ class DiscreteUpdateManager : public ScalarConvertibleComponent<T> {
   void CalcNonContactForces(const drake::systems::Context<T>& context,
                             MultibodyForces<T>* forces) const;
 
+  void CalcForceElementsContribution(const drake::systems::Context<T>& context,
+                                     MultibodyForces<T>* forces) const;
+
   // TODO(xuchenhan-tri): Remove this when SceneGraph takes control of all
   //  geometries.
   const std::vector<std::vector<geometry::GeometryId>>& collision_geometries()
@@ -209,6 +213,8 @@ class DiscreteUpdateManager : public ScalarConvertibleComponent<T> {
 
   const std::unordered_map<geometry::GeometryId, BodyIndex>&
   geometry_id_to_body_index() const;
+
+  const JointLimitsParameters& joint_limits_parameters() const;
   /* @} */
 
   /* Concrete DiscreteUpdateManagers must override these NVI Calc methods to

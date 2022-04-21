@@ -15,6 +15,7 @@
 #include "drake/multibody/contact_solvers/contact_solver_utils.h"
 #include "drake/multibody/contact_solvers/sap/sap_contact_problem.h"
 #include "drake/multibody/contact_solvers/sap/sap_friction_cone_constraint.h"
+#include "drake/multibody/contact_solvers/sap/sap_limit_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_solver.h"
 #include "drake/multibody/contact_solvers/sap/sap_solver_results.h"
 #include "drake/multibody/plant/multibody_plant.h"
@@ -31,6 +32,7 @@ using drake::multibody::contact_solvers::internal::SapSolver;
 using drake::multibody::contact_solvers::internal::SapSolverParameters;
 using drake::multibody::contact_solvers::internal::SapSolverResults;
 using drake::multibody::contact_solvers::internal::SapFrictionConeConstraint;
+using drake::multibody::contact_solvers::internal::SapLimitConstraint;
 using drake::multibody::internal::MultibodyTreeTopology;
 using drake::systems::Context;
 
@@ -528,7 +530,16 @@ void CompliantContactManager<T>::CalcAccelerationsDueToNonContactForcesCache(
   ScopeExit guard(
       [&evaluation_in_progress]() { evaluation_in_progress = false; });
 
-  this->CalcNonContactForces(context, &no_contact_accelerations_cache->forces);
+  //this->CalcNonContactForces(context,
+  //&no_contact_accelerations_cache->forces);
+  //N.B. Joint limits are modeled as constraints. Therefore here we only add all
+  //other external forces.
+  // Compute forces applied through force elements. Note that this resets
+  // forces to empty so must come first.
+  this->CalcForceElementsContribution(context,
+                                &no_contact_accelerations_cache->forces);
+  this->AddInForcesFromInputPorts(context, &no_contact_accelerations_cache->forces);
+
   this->internal_tree().CalcArticulatedBodyForceCache(
       context, no_contact_accelerations_cache->forces,
       &no_contact_accelerations_cache->aba_forces);
@@ -727,6 +738,60 @@ CompliantContactManager<T>::AddContactConstraints(
 }
 
 template <typename T>
+void CompliantContactManager<T>::AddLimitConstraints(
+    const systems::Context<T>& context, SapContactProblem<T>* problem) const {
+  DRAKE_DEMAND(problem != nullptr);
+
+  // TODO(amcastro-tri): consider exposing this parameter.
+  constexpr double kBeta = 0.1;
+
+  const auto& joint_limits_parameters = this->joint_limits_parameters();
+
+  // TODO: you might get away without joint_limits_parameters from the plant,
+  // now that you are not using the stiffness and damping estimated by the
+  // plant.
+  for (size_t index = 0;
+       index < joint_limits_parameters.joints_with_limits.size(); ++index) {
+    const JointIndex joint_index =
+        joint_limits_parameters.joints_with_limits[index];
+    const double lower_limit = joint_limits_parameters.lower_limit[index];
+    const double upper_limit = joint_limits_parameters.upper_limit[index];
+
+    // N.B. MultibodyPlant estimates very conservative (soft) stiffness and
+    // damping parameters to ensure that the explicit treatment of the compliant
+    // forces used to impose limits does not become unstable. SAP however treats
+    // these forces implicitly and therefore these parameters can be tighten for
+    // stiffer limits. Here we let the stiffness parameter to a very high value
+    // so that internally SAP limits the amount of regularization using the
+    // kBeta parameter as described in the SAP paper, [Castro et al., 2021]. As
+    // shown in the SAP paper, a dissipation time scale of the order of the time
+    // step leads to a critically damped constraint.
+    // TODO(amcastro-tri): allow users to specify joint limits stiffness and
+    // damping.
+    const double stiffness = 1.0e12;
+    const double dissipation_time_scale = plant().time_step();
+    //const double stiffness = 10000. * joint_limits_parameters.stiffness[index];
+    //const double damping = joint_limits_parameters.damping[index];
+    //const double dissipation_time_scale = damping / stiffness;
+    const Joint<T>& joint = plant().get_joint(joint_index);
+
+    const int velocity_index = joint.velocity_start();
+    const TreeIndex tree_index =
+        tree_topology().velocity_to_tree_index(velocity_index);
+    const int tree_dof =
+        velocity_index - tree_topology().tree_velocities_start(tree_index);
+    const int tree_nv = tree_topology().num_tree_velocities(tree_index);
+
+    const T& q0 = joint.GetOnePosition(context);
+    typename SapLimitConstraint<T>::Parameters parameters{
+        lower_limit, upper_limit, stiffness, dissipation_time_scale, kBeta};
+
+    problem->AddConstraint(std::make_unique<SapLimitConstraint<T>>(
+        tree_index, tree_dof, tree_nv, q0, std::move(parameters)));
+  }
+}
+
+template <typename T>
 void CompliantContactManager<T>::CalcContactProblemCache(
     const systems::Context<T>& context, ContactProblemCache<T>* cache) const {
   SapContactProblem<T>& problem = *cache->sap_problem;
@@ -736,6 +801,7 @@ void CompliantContactManager<T>::CalcContactProblemCache(
   CalcFreeMotionVelocities(context, &v_star);
   problem.Reset(std::move(A), std::move(v_star));
   cache->R_WC = AddContactConstraints(context, &problem);
+  AddLimitConstraints(context, &problem);
 }
 
 template <typename T>

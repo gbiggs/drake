@@ -66,6 +66,28 @@ struct HydroelasticContactInfoAndBodySpatialForces {
   std::vector<HydroelasticContactInfo<T>> contact_info;
 };
 
+// This structure aids in the bookkeeping of parameters associated with joint
+// limits and the penalty method parameters used to enforce them.
+struct JointLimitsParameters {
+  // list of joints that have limits. These are all single-dof joints.
+  std::vector<JointIndex> joints_with_limits;
+  // Position lower/upper bounds for each joint in joints_with_limits. The
+  // Units depend on the particular joint type. For instance, radians for
+  // RevoluteJoint or meters for PrismaticJoint.
+  std::vector<double> lower_limit;
+  std::vector<double> upper_limit;
+  // Penalty parameters. These are defined in accordance to the penalty force
+  // internally implemented by MultibodyPlant in
+  // AddJointLimitsPenaltyForces().
+  std::vector<double> stiffness;
+  std::vector<double> damping;
+  // If these joint limits will be ignored (because the plant uses continuous
+  // time) and we have not yet warned the user about that fact, this contains
+  // the warning message to be printed. Marked mutable because it's not part
+  // of our dynamics, so that we can clear it from a const method.
+  mutable std::string pending_warning_message;
+};
+
 // Forward declaration.
 template <typename>
 class MultibodyPlantModelAttorney;
@@ -4844,27 +4866,7 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   };
   StribeckModel friction_model_;
 
-  // This structure aids in the bookkeeping of parameters associated with joint
-  // limits and the penalty method parameters used to enforce them.
-  struct JointLimitsParameters {
-    // list of joints that have limits. These are all single-dof joints.
-    std::vector<JointIndex> joints_with_limits;
-    // Position lower/upper bounds for each joint in joints_with_limits. The
-    // Units depend on the particular joint type. For instance, radians for
-    // RevoluteJoint or meters for PrismaticJoint.
-    std::vector<double> lower_limit;
-    std::vector<double> upper_limit;
-    // Penalty parameters. These are defined in accordance to the penalty force
-    // internally implemented by MultibodyPlant in
-    // AddJointLimitsPenaltyForces().
-    std::vector<double> stiffness;
-    std::vector<double> damping;
-    // If these joint limits will be ignored (because the plant uses continuous
-    // time) and we have not yet warned the user about that fact, this contains
-    // the warning message to be printed. Marked mutable because it's not part
-    // of our dynamics, so that we can clear it from a const method.
-    mutable std::string pending_warning_message;
-  } joint_limits_parameters_;
+  internal::JointLimitsParameters joint_limits_parameters_;
 
   // Iteration order on this map DOES matter, and therefore we use an std::map.
   std::map<BodyIndex, geometry::FrameId> body_index_to_frame_id_;

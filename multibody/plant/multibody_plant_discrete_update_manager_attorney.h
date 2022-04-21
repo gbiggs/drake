@@ -82,6 +82,12 @@ class MultibodyPlantDiscreteUpdateManagerAttorney {
     return plant.CalcNonContactForces(context, true /* is discrete */, forces);
   }
 
+  static void CalcForceElementsContribution(
+      const MultibodyPlant<T>& plant, const drake::systems::Context<T>& context,
+      MultibodyForces<T>* forces) {
+    return plant.CalcForceElementsContribution(context, forces);
+  }
+
   // TODO(xuchenhan-tri): Remove this when SceneGraph takes control of all
   //  geometries.
   /* Returns the per-body arrays of collision geometries indexed by BodyIndex
@@ -102,6 +108,11 @@ class MultibodyPlantDiscreteUpdateManagerAttorney {
   static const std::unordered_map<geometry::GeometryId, BodyIndex>&
   geometry_id_to_body_index(const MultibodyPlant<T>& plant) {
     return plant.geometry_id_to_body_index_;
+  }
+
+  static const internal::JointLimitsParameters& joint_limits_parameters(
+      const MultibodyPlant<T>& plant) {
+    return plant.joint_limits_parameters_;
   }
 };
 }  // namespace internal
