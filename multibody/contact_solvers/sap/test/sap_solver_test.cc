@@ -18,6 +18,12 @@
 #include "drake/multibody/contact_solvers/sap/sap_friction_cone_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_solver_results.h"
 #include "drake/multibody/contact_solvers/system_dynamics_data.h"
+#include "drake/systems/framework/context.h"
+#include "drake/multibody/contact_solvers/supernodal_solver.h"
+
+#include <iostream>
+#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
+#define PRINT_VARn(a) std::cout << #a":\n" << a << std::endl;
 
 using Eigen::Matrix3d;
 using Eigen::MatrixXd;
@@ -25,11 +31,34 @@ using Eigen::Vector2d;
 using Eigen::Vector3d;
 using Eigen::Vector4d;
 using Eigen::VectorXd;
+using drake::systems::Context;
 
 namespace drake {
 namespace multibody {
 namespace contact_solvers {
 namespace internal {
+
+struct SapSolverTester {
+  static std::unique_ptr<SuperNodalSolver> MakeSuperNodalSolver(
+      const SapSolver<double>& sap) {
+    return sap.MakeSuperNodalSolver();
+  }
+
+  static void UpdateSuperNodalSolver(const SapSolver<double>& sap,
+                                     const Context<double>& context,
+                                     SuperNodalSolver* supernodal_solver) {
+    sap.UpdateSuperNodalSolver(context, supernodal_solver);
+  }
+
+  static const SapModel<double>& model(const SapSolver<double>& sap) {
+    return *sap.model_;
+  }
+
+  static MatrixX<double> CalcDenseHessian(
+      const SapSolver<double>& sap, const systems::Context<double>& context) {
+    return sap.CalcDenseHessian(context);
+  }
+}; 
 
 constexpr double kEps = std::numeric_limits<double>::epsilon();
 // Suggested value for the dimensionless parameter used in the regularization of
@@ -668,6 +697,8 @@ class LimitConstraint final : public SapConstraint<T> {
                const Eigen::Ref<const VectorX<double>>& R,
                EigenPtr<VectorX<double>> gamma,
                MatrixX<double>* dPdy) const final {
+    PRINT_VAR(y.transpose());                 
+
     // For this constrain the number of equations equals the number of
     // velocities in the constrained clique.
     const int nv = this->num_constraint_equations();
@@ -685,6 +716,7 @@ class LimitConstraint final : public SapConstraint<T> {
         (*gamma)(i) = 0.0;
       }
     }
+    PRINT_VAR(gamma->transpose());
   };
 
   std::unique_ptr<SapConstraint<T>> Clone() const final {
@@ -768,6 +800,26 @@ class SapNewtonIterationTest : public ::testing::Test {
         std::make_unique<LimitConstraint<double>>(1, vl_, vu_, std::move(R)));
   }
 
+  void VerifyHessian(const SapSolver<double>& sap, const VectorXd& v_guess) const {
+    // Verify Hessian obtained with sparse supernodal algebra.
+    std::unique_ptr<SuperNodalSolver> supernodal_solver =
+        SapSolverTester::MakeSuperNodalSolver(sap);
+    const SapModel<double>& model = SapSolverTester::model(sap);
+    const auto context = model.MakeContext();
+    auto v = model.GetMutableVelocities(context.get());
+    model.velocities_permutation().Apply(v_guess, &v);
+    SapSolverTester::UpdateSuperNodalSolver(sap, *context,
+                                            supernodal_solver.get());
+    const MatrixXd H = supernodal_solver->MakeFullMatrix();
+    const MatrixXd H_expected =
+        SapSolverTester::CalcDenseHessian(sap, *context);
+    PRINT_VAR(H.norm());
+    PRINT_VAR((H - H_expected).norm() / H.norm());
+    PRINT_VARn(H);
+    EXPECT_TRUE(CompareMatrices(H, H_expected, 3.0 * kEps,
+                                MatrixCompareType::relative));
+  }
+
  protected:
   VectorXd vl_;
   VectorXd vu_;
@@ -818,6 +870,9 @@ TEST_F(SapNewtonIterationTest, GuessWithinLimits) {
   // solution v_star_.
   VectorXd v_guess = v_star_;
   v_guess.segment<3>(2) = 0.9 * vl_ + 0.1 * vu_;
+  PRINT_VAR(vl_.transpose());
+  PRINT_VAR(vu_.transpose());
+  PRINT_VAR(v_guess.transpose());
   SapSolverResults<double> result;
   const SapSolverStatus status =
       sap.SolveWithGuess(*sap_problem_, v_guess, &result);
@@ -844,6 +899,11 @@ TEST_F(SapNewtonIterationTest, GuessWithinLimits) {
   EXPECT_TRUE(CompareMatrices(
       result.gamma, VectorXd::Zero(sap_problem_->num_constraint_equations()),
       3.0 * kEps, MatrixCompareType::absolute));
+
+  PRINT_VAR(result.gamma.transpose());
+
+  PRINT_VAR(v_guess.transpose());
+  VerifyHessian(sap, v_guess);
 }
 
 // For this problem when the initial guess is outside the constraint's limits
@@ -890,6 +950,9 @@ TEST_F(SapNewtonIterationTest, GuessOutsideLimits) {
   EXPECT_TRUE(CompareMatrices(
       result.gamma, VectorXd::Zero(sap_problem_->num_constraint_equations()),
       3.0 * kEps, MatrixCompareType::absolute));
+
+  // Verify Hessian obtained with sparse supernodal algebra.
+  VerifyHessian(sap, v_guess);
 }
 
 }  // namespace internal

@@ -265,11 +265,27 @@ class SapSolver {
       const SearchDirectionData& search_direction_data,
       systems::Context<T>* scratch_workspace) const;
 
+  MatrixX<T> CalcDenseHessian(const systems::Context<T>& context) const;
+
+  // Makes a new SuperNodalSolver compatible with the underlying SapModel.
+  std::unique_ptr<SuperNodalSolver> MakeSuperNodalSolver() const;
+
+  // Evaluates the constraint's Hessian and updates `supernodal_solver`'s weight
+  // matrix.
+  void UpdateSuperNodalSolver(const systems::Context<T>& context,
+                              SuperNodalSolver* supernodal_solver) const;
+
+  // Updates the supernodal solver with the constraint's Hessian (function of
+  // `context`), factorizes it, and solves for the search direction `dv`.
+  void CallSuperNodalSolver(const systems::Context<T>& context,
+                            SuperNodalSolver* supernodal_solver,
+                            VectorX<T>* dv) const;                              
+
   // Solves for dv using dense algebra, for debugging.
   // @pre context was created by the underlying SapModel.
   // TODO(amcastro-tri): Add AutoDiffXd support.
   void CallDenseSolver(const systems::Context<T>& context,
-                       VectorX<T>* dv) const;
+                       VectorX<T>* dv) const;  
 
   // This method performs one iteration of the SAP solver. It updates gradient
   // of the primal cost ∇ℓₚ, the cost's Hessian H and solves for the velocity
@@ -295,10 +311,6 @@ template <>
 SapSolverStatus SapSolver<double>::SolveWithGuess(
     const SapContactProblem<double>&, const VectorX<double>&,
     SapSolverResults<double>*);
-template <>
-void SapSolver<double>::CalcSearchDirectionData(
-    const systems::Context<double>&, SuperNodalSolver*,
-    SapSolver<double>::SearchDirectionData*) const;
 
 }  // namespace internal
 }  // namespace contact_solvers

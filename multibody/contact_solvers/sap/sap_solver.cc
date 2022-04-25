@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -147,9 +148,7 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
         // Instantiate supernodal solver on the first iteration when needed. If
         // the stopping criteria is satisfied at k = 0 (good guess), then we
         // skip the expensive instantiation of the solver.
-        const BlockSparseMatrix<double>& J = model_->constraints_bundle().J();
-        supernodal_solver = std::make_unique<SuperNodalSolver>(
-            J.block_rows(), J.get_blocks(), model_->dynamics_matrix());
+        supernodal_solver = MakeSuperNodalSolver();
       }
     }
 
@@ -349,8 +348,7 @@ std::pair<T, int> SapSolver<T>::PerformBackTrackingLineSearch(
 }
 
 template <typename T>
-void SapSolver<T>::CallDenseSolver(const Context<T>& context,
-                                   VectorX<T>* dv) const {
+MatrixX<T> SapSolver<T>::CalcDenseHessian(const Context<T>& context) const {
   // Explicitly build dense Hessian.
   // These matrices could be saved in the cache. However this method is only
   // intended as an alternative for debugging and optimizing it might not be
@@ -383,6 +381,27 @@ void SapSolver<T>::CallDenseSolver(const Context<T>& context,
 
   const MatrixX<T> H = Adense + Jdense.transpose() * Gdense * Jdense;
 
+  return H;
+}
+
+template <typename T>
+std::unique_ptr<SuperNodalSolver> SapSolver<T>::MakeSuperNodalSolver() const {
+  if constexpr (std::is_same_v<T, double>) {
+    const BlockSparseMatrix<T>& J = model_->constraints_bundle().J();
+    return std::make_unique<SuperNodalSolver>(J.block_rows(), J.get_blocks(),
+                                              model_->dynamics_matrix());
+  } else {
+    throw std::logic_error(
+        "SapSolver::MakeSuperNodalSolver(): SuperNodalSolver only supports T "
+        "= double.");
+  }
+}
+
+template <typename T>
+void SapSolver<T>::CallDenseSolver(const Context<T>& context,
+                                   VectorX<T>* dv) const {
+  const MatrixX<T> H = CalcDenseHessian(context);
+
   // Factorize Hessian.
   // TODO(amcastro-tri): Make use of mat::SolveLinearSystem() for a quick and
   // dirty way to support AutoDiffXd, at least to build unit tests.
@@ -403,28 +422,51 @@ void SapSolver<T>::CallDenseSolver(const Context<T>& context,
 }
 
 template <typename T>
-void SapSolver<T>::CalcSearchDirectionData(
-    const systems::Context<T>&, SuperNodalSolver*,
-    SapSolver<T>::SearchDirectionData*) const {
-  throw std::logic_error(
-      "SapSolver::CalcSearchDirectionData(): Only T = double is supported.");
+void SapSolver<T>::UpdateSuperNodalSolver(
+    const Context<T>& context, SuperNodalSolver* supernodal_solver) const {
+  if constexpr (std::is_same_v<T, double>) {
+    const std::vector<MatrixX<double>>& G =
+        model_->EvalConstraintsHessian(context);
+    supernodal_solver->SetWeightMatrix(G);
+  } else {
+    unused(context);
+    unused(supernodal_solver);
+    throw std::logic_error(
+        "SapSolver::UpdateSuperNodalSolver(): SuperNodalSolver only supports T "
+        "= double.");
+  }
 }
 
-template <>
-void SapSolver<double>::CalcSearchDirectionData(
-    const systems::Context<double>& context,
-    SuperNodalSolver* supernodal_solver,
-    SapSolver<double>::SearchDirectionData* data) const {
-  if (supernodal_solver != nullptr) {
-    const std::vector<MatrixX<double>>& G = model_->EvalConstraintsHessian(context);
-    supernodal_solver->SetWeightMatrix(G);
+template <typename T>
+void SapSolver<T>::CallSuperNodalSolver(const Context<T>& context,
+                                        SuperNodalSolver* supernodal_solver,
+                                        VectorX<T>* dv) const {
+  if constexpr (std::is_same_v<T, double>) {
+    UpdateSuperNodalSolver(context, supernodal_solver);
     if (!supernodal_solver->Factor()) {
       throw std::logic_error("SapSolver: Supernodal factorization failed.");
     }
     // We solve in place to avoid heap allocating additional memory for the
     // right hand side.
-    data->dv = -model_->EvalCostGradient(context);
-    supernodal_solver->SolveInPlace(&data->dv);
+    *dv = -model_->EvalCostGradient(context);
+    supernodal_solver->SolveInPlace(dv);
+  } else {
+    unused(context);
+    unused(supernodal_solver);
+    unused(dv);
+    throw std::logic_error(
+        "SapSolver::CallSuperNodalSolver(): SuperNodalSolver only supports T "
+        "= double.");
+  }
+}
+
+template <typename T>
+void SapSolver<T>::CalcSearchDirectionData(
+    const systems::Context<T>& context,
+    SuperNodalSolver* supernodal_solver,
+    SapSolver<T>::SearchDirectionData* data) const {
+  if (supernodal_solver != nullptr) {
+    CallSuperNodalSolver(context, supernodal_solver, &data->dv);
   } else {
     // Update search direction dv.
     CallDenseSolver(context, &data->dv);
