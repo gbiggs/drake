@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "drake/common/default_scalars.h"
+#include "drake/multibody/contact_solvers/supernodal_solver.h"
 
 namespace drake {
 namespace multibody {
@@ -111,6 +112,9 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
   auto scratch = model_->MakeContext();
   SearchDirectionData search_direction_data(nv, nk);
   stats_ = SolverStats();
+  // The supernodal solver is expensive to instantiate and therefore we only
+  // instantiate when needed.
+  std::unique_ptr<SuperNodalSolver> supernodal_solver;
 
   {
     // We limit the lifetime of this reference, v, to within this scope where we
@@ -139,9 +143,14 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
       converged = true;
       break;
     } else {
-      // TODO(amcastro-tri): Instantiate supernodal solver on the first
-      // iteration if it is needed. If the stopping criteria is satisfied at k =
-      // 0 (good guess), then we skip the expensive instantiation of the solver.
+      if (!parameters_.use_dense_algebra) {
+        // Instantiate supernodal solver on the first iteration when needed. If
+        // the stopping criteria is satisfied at k = 0 (good guess), then we
+        // skip the expensive instantiation of the solver.
+        const BlockSparseMatrix<double>& J = model_->constraints_bundle().J();
+        supernodal_solver = std::make_unique<SuperNodalSolver>(
+            J.block_rows(), J.get_blocks(), model_->dynamics_matrix());
+      }
     }
 
     // Exit if the maximum number of iterations is reached, but only after
@@ -151,7 +160,8 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
 
     // This is the most expensive update: it performs the factorization of H to
     // solve for the search direction dv.
-    CalcSearchDirectionData(*context, &search_direction_data);
+    CalcSearchDirectionData(*context, supernodal_solver.get(),
+                            &search_direction_data);
     const VectorX<double>& dv = search_direction_data.dv;
 
     const auto [alpha, ls_iters] = PerformBackTrackingLineSearch(
@@ -394,10 +404,31 @@ void SapSolver<T>::CallDenseSolver(const Context<T>& context,
 
 template <typename T>
 void SapSolver<T>::CalcSearchDirectionData(
-    const systems::Context<T>& context,
-    SapSolver<T>::SearchDirectionData* data) const {
-  // Update search direction dv.
-  CallDenseSolver(context, &data->dv);
+    const systems::Context<T>&, SuperNodalSolver*,
+    SapSolver<T>::SearchDirectionData*) const {
+  throw std::logic_error(
+      "SapSolver::CalcSearchDirectionData(): Only T = double is supported.");
+}
+
+template <>
+void SapSolver<double>::CalcSearchDirectionData(
+    const systems::Context<double>& context,
+    SuperNodalSolver* supernodal_solver,
+    SapSolver<double>::SearchDirectionData* data) const {
+  if (supernodal_solver != nullptr) {
+    const std::vector<MatrixX<double>>& G = model_->EvalConstraintsHessian(context);
+    supernodal_solver->SetWeightMatrix(G);
+    if (!supernodal_solver->Factor()) {
+      throw std::logic_error("SapSolver: Supernodal factorization failed.");
+    }
+    // We solve in place to avoid heap allocating additional memory for the
+    // right hand side.
+    data->dv = -model_->EvalCostGradient(context);
+    supernodal_solver->SolveInPlace(&data->dv);
+  } else {
+    // Update search direction dv.
+    CallDenseSolver(context, &data->dv);
+  }
 
   // Update Δp, Δvc and d²ellA/dα².
   model_->constraints_bundle().J().Multiply(data->dv, &data->dvc);

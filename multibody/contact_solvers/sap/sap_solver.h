@@ -6,6 +6,7 @@
 
 #include "drake/multibody/contact_solvers/sap/sap_model.h"
 #include "drake/multibody/contact_solvers/sap/sap_solver_results.h"
+#include "drake/multibody/contact_solvers/supernodal_solver.h"
 #include "drake/systems/framework/context.h"
 
 namespace drake {
@@ -108,6 +109,10 @@ struct SapSolverParameters {
 
   // Tolerance used in impulse soft norms. In Ns.
   double soft_tolerance{1.0e-7};
+
+  // SAP uses sparse supernodal algebra by default. Set this to true to use
+  // dense algebra instead. Typically used for testing.
+  bool use_dense_algebra{false};
 };
 
 // This class implements the Semi-Analytic Primal (SAP) solver described in
@@ -272,6 +277,7 @@ class SapSolver {
   // additional derived quantities from dv.
   // @pre context was created by the underlying SapModel.
   void CalcSearchDirectionData(const systems::Context<T>& context,
+                               SuperNodalSolver* supernodal_solver,
                                SearchDirectionData* data) const;
 
   std::unique_ptr<SapModel<T>> model_;
@@ -289,6 +295,10 @@ template <>
 SapSolverStatus SapSolver<double>::SolveWithGuess(
     const SapContactProblem<double>&, const VectorX<double>&,
     SapSolverResults<double>*);
+template <>
+void SapSolver<double>::CalcSearchDirectionData(
+    const systems::Context<double>&, SuperNodalSolver*,
+    SapSolver<double>::SearchDirectionData*) const;
 
 }  // namespace internal
 }  // namespace contact_solvers
