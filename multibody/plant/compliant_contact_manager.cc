@@ -628,6 +628,7 @@ void CompliantContactManager<T>::CalcLinearDynamicsMatrix(
   // implement a MultibodyPlant method to compute the per-tree mass matrices.
   MatrixX<T> M(nv, nv);
   plant().CalcMassMatrix(context, &M);
+  M.diagonal() += plant().time_step() * joint_damping_;
 
   for (TreeIndex t(0); t < tree_topology().num_trees(); ++t) {
     const int tree_start = tree_topology().tree_velocities_start(t);
