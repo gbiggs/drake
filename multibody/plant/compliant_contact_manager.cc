@@ -47,6 +47,8 @@ template <typename T>
 AccelerationsDueToExternalForcesCache<T>::AccelerationsDueToExternalForcesCache(
     const MultibodyTreeTopology& topology)
     : forces(topology.num_bodies(), topology.num_velocities()),
+      abic(topology),
+      Zb_Bo_W(topology.num_bodies()),
       aba_forces(topology),
       ac(topology) {}
 
@@ -537,7 +539,7 @@ void CompliantContactManager<T>::CalcNonContactForcesExcludingJointLimits(
 template <typename T>
 void CompliantContactManager<T>::CalcAccelerationsDueToNonContactForcesCache(
     const systems::Context<T>& context,
-    AccelerationsDueToExternalForcesCache<T>* no_contact_accelerations_cache)
+    AccelerationsDueToExternalForcesCache<T>* forward_dynamics_cache)
     const {
   // To overcame issue #12786, we use this additional cache entry
   // to detect algebraic loops.
@@ -575,23 +577,23 @@ void CompliantContactManager<T>::CalcAccelerationsDueToNonContactForcesCache(
   // N.B. Joint limits are modeled as constraints. Therefore here we only add
   // all other external forces.
   CalcNonContactForcesExcludingJointLimits(
-      context, &no_contact_accelerations_cache->forces);
+      context, &forward_dynamics_cache->forces);
 
   const VectorX<T> diagonal_inertia = joint_damping_ * plant().time_step();
 
   // We compute the articulated body inertia including the contribution of the
   // additional diagonal elements arising from the implicit treatment of joint
   // damping.
-  ArticulatedBodyInertiaCache<T> abic(tree_topology());
   this->internal_tree().CalcArticulatedBodyInertiaCache(
-      context, diagonal_inertia, &abic);
-  // Once computed abic, it must be consistently included in the calls below.
+      context, diagonal_inertia, &forward_dynamics_cache->abic);
+  this->internal_tree().CalcArticulatedBodyForceBias(
+      context, forward_dynamics_cache->abic, &forward_dynamics_cache->Zb_Bo_W);
   this->internal_tree().CalcArticulatedBodyForceCache(
-      context, abic, no_contact_accelerations_cache->forces,
-      &no_contact_accelerations_cache->aba_forces);
+      context, forward_dynamics_cache->abic, forward_dynamics_cache->Zb_Bo_W,
+      forward_dynamics_cache->forces, &forward_dynamics_cache->aba_forces);
   this->internal_tree().CalcArticulatedBodyAccelerations(
-      context, abic, no_contact_accelerations_cache->aba_forces,
-      &no_contact_accelerations_cache->ac);
+      context, forward_dynamics_cache->abic, forward_dynamics_cache->aba_forces,
+      &forward_dynamics_cache->ac);
 
   // Mark the end of the computation.
   evaluation_in_progress = false;

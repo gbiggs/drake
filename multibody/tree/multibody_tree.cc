@@ -1086,12 +1086,11 @@ void MultibodyTree<T>::CalcSpatialAccelerationBias(
 
 template <typename T>
 void MultibodyTree<T>::CalcArticulatedBodyForceBias(
-  const systems::Context<T>& context,
+    const systems::Context<T>& context,
+    const ArticulatedBodyInertiaCache<T>& abic,
     std::vector<SpatialForce<T>>* Zb_Bo_W_all) const {
   DRAKE_THROW_UNLESS(Zb_Bo_W_all != nullptr);
   DRAKE_THROW_UNLESS(static_cast<int>(Zb_Bo_W_all->size()) == num_bodies());
-  const ArticulatedBodyInertiaCache<T>& abic =
-      EvalArticulatedBodyInertiaCache(context);
   const std::vector<SpatialAcceleration<T>>& Ab_WB_cache =
       EvalSpatialAccelerationBiasCache(context);
 
@@ -1108,6 +1107,17 @@ void MultibodyTree<T>::CalcArticulatedBodyForceBias(
     SpatialForce<T>& Zb_Bo_W = (*Zb_Bo_W_all)[body_node_index];
     Zb_Bo_W = Pplus_PB_W * Ab_WB;
   }
+}
+
+template <typename T>
+void MultibodyTree<T>::CalcArticulatedBodyForceBias(
+    const systems::Context<T>& context,
+    std::vector<SpatialForce<T>>* Zb_Bo_W_all) const {
+  DRAKE_THROW_UNLESS(Zb_Bo_W_all != nullptr);
+  DRAKE_THROW_UNLESS(static_cast<int>(Zb_Bo_W_all->size()) == num_bodies());
+  const ArticulatedBodyInertiaCache<T>& abic =
+      EvalArticulatedBodyInertiaCache(context);
+  CalcArticulatedBodyForceBias(context, abic, Zb_Bo_W_all);
 }
 
 template <typename T>
@@ -1340,32 +1350,21 @@ void MultibodyTree<T>::CalcInverseDynamics(
 template <typename T>
 void MultibodyTree<T>::CalcForceElementsContribution(
     const systems::Context<T>& context,
-    const PositionKinematicsCache<T>&,
-    const VelocityKinematicsCache<T>&,
+    const PositionKinematicsCache<T>& pc,
+    const VelocityKinematicsCache<T>& vc,
     MultibodyForces<T>* forces) const {
   DRAKE_DEMAND(forces != nullptr);
   DRAKE_DEMAND(forces->CheckHasRightSizeForModel(*this));
-  CalcForceElementsContributionExcludingJointDamping(context, forces);
-
-  // TODO(amcastro-tri): Remove this call once damping is implemented in terms
-  // of force elements.
-  AddJointDampingForces(context, forces);
-}
-
-template <typename T>
-void MultibodyTree<T>::CalcForceElementsContributionExcludingJointDamping(
-    const systems::Context<T>& context, MultibodyForces<T>* forces) const {
-  DRAKE_DEMAND(forces != nullptr);
-  DRAKE_DEMAND(forces->CheckHasRightSizeForModel(*this));
-
-  const PositionKinematicsCache<T>& pc = EvalPositionKinematics(context);
-  const VelocityKinematicsCache<T>& vc = EvalVelocityKinematics(context);
 
   forces->SetZero();
   // Add contributions from force elements.
   for (const auto& force_element : owned_force_elements_) {
     force_element->CalcAndAddForceContribution(context, pc, vc, forces);
   }
+
+  // TODO(amcastro-tri): Remove this call once damping is implemented in terms
+  // of force elements.
+  AddJointDampingForces(context, forces);
 }
 
 template<typename T>
@@ -2860,14 +2859,14 @@ template <typename T>
 void MultibodyTree<T>::CalcArticulatedBodyInertiaCache(
     const systems::Context<T>& context,
     ArticulatedBodyInertiaCache<T>* abic) const {
-  const std::optional<VectorX<T>> empty_diagonal = std::nullopt;
-  CalcArticulatedBodyInertiaCache(context, empty_diagonal, abic);
+  const VectorX<T>& reflected_inertia = EvalReflectedInertiaCache(context);
+  CalcArticulatedBodyInertiaCache(context, reflected_inertia, abic);
 }
 
 template <typename T>
 void MultibodyTree<T>::CalcArticulatedBodyInertiaCache(
     const systems::Context<T>& context,
-    const std::optional<VectorX<T>>& diagonal_inertia,
+    const VectorX<T>& diagonal_inertias,
     ArticulatedBodyInertiaCache<T>* abic) const {
   DRAKE_DEMAND(abic != nullptr);
 
@@ -2878,12 +2877,6 @@ void MultibodyTree<T>::CalcArticulatedBodyInertiaCache(
       EvalAcrossNodeJacobianWrtVExpressedInWorld(context);
   const std::vector<SpatialInertia<T>>& spatial_inertia_in_world_cache =
       EvalSpatialInertiaInWorldCache(context);
-  // TODO(amcastro-tri): consider how to get rid of this heap allocation.
-  VectorX<T> total_diagonal = EvalReflectedInertiaCache(context);
-  if (diagonal_inertia) {
-    DRAKE_DEMAND(diagonal_inertia->size() == num_velocities());
-    total_diagonal += *diagonal_inertia;
-  }
 
   // Perform tip-to-base recursion, skipping the world.
   for (int depth = tree_height() - 1; depth > 0; --depth) {
@@ -2897,7 +2890,7 @@ void MultibodyTree<T>::CalcArticulatedBodyInertiaCache(
           spatial_inertia_in_world_cache[body_node_index];
 
       node.CalcArticulatedBodyInertiaCache_TipToBase(
-          context, pc, H_PB_W, M_B_W, total_diagonal, abic);
+          context, pc, H_PB_W, M_B_W, diagonal_inertias, abic);
     }
   }
 }
@@ -2906,6 +2899,7 @@ template <typename T>
 void MultibodyTree<T>::CalcArticulatedBodyForceCache(
     const systems::Context<T>& context,
     const ArticulatedBodyInertiaCache<T>& abic,
+    const std::vector<SpatialForce<T>>& Zb_Bo_W_cache,
     const MultibodyForces<T>& forces,
     ArticulatedBodyForceCache<T>* aba_force_cache) const {
   DRAKE_DEMAND(aba_force_cache != nullptr);
@@ -2913,7 +2907,7 @@ void MultibodyTree<T>::CalcArticulatedBodyForceCache(
 
   // Get position and velocity kinematics from cache.
   const PositionKinematicsCache<T>& pc = EvalPositionKinematics(context);
-  const VelocityKinematicsCache<T>& vc = EvalVelocityKinematics(context);  
+  const VelocityKinematicsCache<T>& vc = EvalVelocityKinematics(context);
 
   // Extract generalized forces and body forces.
   const VectorX<T>& generalized_forces = forces.generalized_forces();
@@ -2926,13 +2920,6 @@ void MultibodyTree<T>::CalcArticulatedBodyForceCache(
   // the Newton-Euler equation: M_B_W * A_WB + Fb_B_W = Fapp_B_W.
   const std::vector<SpatialForce<T>>& dynamic_bias_cache =
       EvalDynamicBiasCache(context);
-
-  // We evaluate the kinematics dependent articulated body force bias Zb_Bo_W =
-  // Pplus_PB_W * Ab_WB. When cached, this corresponds to a significant
-  // computational gain when performing ABA with the same context (storing the
-  // same q and v) but different applied `forces`.
-  const std::vector<SpatialForce<T>>& Zb_Bo_W_cache =
-      EvalArticulatedBodyForceBiasCache(context);
 
   // Perform tip-to-base recursion, skipping the world.
   for (int depth = tree_height() - 1; depth > 0; --depth) {
@@ -2965,7 +2952,14 @@ void MultibodyTree<T>::CalcArticulatedBodyForceCache(
   // Get configuration dependent articulated body inertia cache.
   const ArticulatedBodyInertiaCache<T>& abic =
       EvalArticulatedBodyInertiaCache(context);
-  CalcArticulatedBodyForceCache(context, abic, forces, aba_force_cache);
+  // We evaluate the kinematics dependent articulated body force bias Zb_Bo_W =
+  // Pplus_PB_W * Ab_WB. When cached, this corresponds to a significant
+  // computational gain when performing ABA with the same context (storing the
+  // same q and v) but different applied `forces`.
+  const std::vector<SpatialForce<T>>& Zb_Bo_W_cache =
+      EvalArticulatedBodyForceBiasCache(context);
+  CalcArticulatedBodyForceCache(context, abic, Zb_Bo_W_cache, forces,
+                                aba_force_cache);
 }
 
 template <typename T>

@@ -25,7 +25,6 @@
 #include "drake/multibody/plant/discrete_contact_pair.h"
 #include "drake/multibody/plant/externally_applied_spatial_force.h"
 #include "drake/multibody/plant/hydroelastic_traction_calculator.h"
-#include "drake/multibody/plant/physical_model.h"
 #include "drake/multibody/tree/prismatic_joint.h"
 #include "drake/multibody/tree/revolute_joint.h"
 #include "drake/multibody/triangle_quadrature/gaussian_triangle_quadrature_rule.h"
@@ -732,16 +731,6 @@ void MultibodyPlant<T>::CalcForceElementsContribution(
       context, EvalPositionKinematics(context),
       EvalVelocityKinematics(context),
       forces);
-}
-
-template <typename T>
-void MultibodyPlant<T>::CalcForceElementsContributionExcludingJointDamping(
-    const systems::Context<T>& context, MultibodyForces<T>* forces) const {
-  this->ValidateContext(context);
-  DRAKE_THROW_UNLESS(forces != nullptr);
-  DRAKE_THROW_UNLESS(forces->CheckHasRightSizeForModel(internal_tree()));
-  internal_tree().CalcForceElementsContributionExcludingJointDamping(context,
-                                                                     forces);
 }
 
 template<typename T>

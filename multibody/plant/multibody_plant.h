@@ -2952,9 +2952,6 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
   void CalcForceElementsContribution(
       const systems::Context<T>& context, MultibodyForces<T>* forces) const;
 
-  void CalcForceElementsContributionExcludingJointDamping(
-    const systems::Context<T>& context, MultibodyForces<T>* forces) const;
-
   /// Computes the generalized forces `tau_g(q)` due to gravity as a function
   /// of the generalized positions `q` stored in the input `context`.
   /// The vector of generalized forces due to gravity `tau_g(q)` is defined such

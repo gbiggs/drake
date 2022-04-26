@@ -81,6 +81,8 @@ struct AccelerationsDueToExternalForcesCache {
   explicit AccelerationsDueToExternalForcesCache(
       const MultibodyTreeTopology& topology);
   MultibodyForces<T> forces;  // The external forces causing accelerations.
+  ArticulatedBodyInertiaCache<T> abic;   // Articulated body inertia cache.
+  std::vector<SpatialForce<T>> Zb_Bo_W;  // Articulated body biases cache.
   multibody::internal::ArticulatedBodyForceCache<T> aba_forces;  // ABA cache.
   multibody::internal::AccelerationKinematicsCache<T> ac;  // Accelerations.
 };
