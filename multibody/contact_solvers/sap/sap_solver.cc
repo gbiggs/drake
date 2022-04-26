@@ -9,6 +9,10 @@
 #include "drake/common/default_scalars.h"
 #include "drake/multibody/contact_solvers/supernodal_solver.h"
 
+#include <iostream>
+#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
+#define PRINT_VARn(a) std::cout << #a":\n" << a << std::endl;
+
 namespace drake {
 namespace multibody {
 namespace contact_solvers {
@@ -107,6 +111,10 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
   model_ = std::make_unique<SapModel<double>>(&problem);
   const int nv = model_->num_velocities();
   const int nk = model_->num_constraint_equations();
+
+  PRINT_VAR(model_->num_velocities());
+  PRINT_VAR(model_->num_constraints());
+  PRINT_VAR(model_->num_constraint_equations());
 
   // Allocate the necessary memory to work with.
   auto context = model_->MakeContext();
@@ -443,7 +451,13 @@ void SapSolver<T>::CallSuperNodalSolver(const Context<T>& context,
                                         VectorX<T>* dv) const {
   if constexpr (std::is_same_v<T, double>) {
     UpdateSuperNodalSolver(context, supernodal_solver);
-    if (!supernodal_solver->Factor()) {
+    const MatrixX<double> Hsn = supernodal_solver->MakeFullMatrix();
+    const MatrixX<double> Hdense = CalcDenseHessian(context);
+    PRINT_VAR((Hsn - Hdense).norm());
+    if (!supernodal_solver->Factor()) {      
+      PRINT_VARn(Hsn);
+      PRINT_VAR(Hsn.ldlt().rcond());
+      PRINT_VAR(Hdense.ldlt().rcond());
       throw std::logic_error("SapSolver: Supernodal factorization failed.");
     }
     // We solve in place to avoid heap allocating additional memory for the
