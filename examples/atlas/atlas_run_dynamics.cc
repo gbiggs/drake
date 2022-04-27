@@ -1,3 +1,4 @@
+#include <chrono>
 #include <memory>
 
 #include <gflags/gflags.h>
@@ -36,6 +37,7 @@ using Eigen::Translation3d;
 using Eigen::Vector3d;
 using Eigen::VectorXd;
 using drake::multibody::internal::CompliantContactManager;
+using clock = std::chrono::steady_clock;
 
 int do_main() {
   if (FLAGS_mbp_discrete_update_period < 0) {
@@ -135,7 +137,12 @@ int do_main() {
 
   auto simulator =
       MakeSimulatorFromGflags(*diagram, std::move(diagram_context));
+  clock::time_point sim_start_time = clock::now();        
   simulator->AdvanceTo(FLAGS_simulation_time);
+  clock::time_point sim_end_time = clock::now();
+  const double sim_time =
+      std::chrono::duration<double>(sim_end_time - sim_start_time).count();
+  std::cout << "AdvanceTo() time [sec]: " << sim_time << std::endl;
 
   systems::PrintSimulatorStatistics(*simulator);
 
