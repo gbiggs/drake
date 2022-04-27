@@ -32,6 +32,7 @@ using drake::multibody::contact_solvers::internal::SapContactProblem;
 using drake::multibody::contact_solvers::internal::SapFrictionConeConstraint;
 using drake::multibody::contact_solvers::internal::SapSolverResults;
 using drake::multibody::contact_solvers::internal::SapSolver;
+using drake::multibody::contact_solvers::internal::SapSolverParameters;
 using drake::multibody::contact_solvers::internal::SapSolverStatus;
 using drake::multibody::internal::DiscreteContactPair;
 using drake::systems::Context;
@@ -789,6 +790,13 @@ TEST_F(CompliantContactManagerTest, DoCalcContactSolverResults) {
       *EvalContactProblemCache(*plant_context_).sap_problem;
   const int num_contacts = sap_problem.num_constraints();  // Only contacts.
   SapSolver<double> sap;
+  // N.B. Here we keep in sync with the same parameters set by the contact
+  // manager. Updates of these parameters in the manager might require updating
+  // the paremeters here.
+  SapSolverParameters  params;
+  params.ls_alpha_max = 1.0 / params.ls_rho;
+  params.rel_tolerance = 1e-6;
+  sap.set_parameters(params);
   SapSolverResults<double> sap_results;
   const SapSolverStatus status = sap.SolveWithGuess(
       sap_problem, plant_->GetVelocities(*plant_context_), &sap_results);
