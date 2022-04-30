@@ -129,6 +129,8 @@ class CompliantContactManager final
  public:
   DRAKE_NO_COPY_NO_MOVE_NO_ASSIGN(CompliantContactManager)
 
+  using internal::DiscreteUpdateManager<T>::plant;
+
   // Constructs a contact manager that takes ownership of the supplied
   // `contact_solver` to solve the underlying contact problem.
   // @pre contact_solver != nullptr.
@@ -145,8 +147,6 @@ class CompliantContactManager final
     systems::CacheIndex non_contact_forces_accelerations;
     systems::CacheIndex non_contact_forces_evaluation_in_progress;
   };
-
-  using internal::DiscreteUpdateManager<T>::plant;
 
   // Provide private access for unit testing only.
   friend class CompliantContactManagerTest;
