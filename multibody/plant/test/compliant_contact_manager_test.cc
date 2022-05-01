@@ -21,6 +21,10 @@
 #include "drake/systems/primitives/pass_through.h"
 #include "drake/systems/primitives/zero_order_hold.h"
 
+
+#include <iostream>
+#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
+
 using drake::geometry::GeometryId;
 using drake::geometry::PenetrationAsPointPair;
 using drake::geometry::ProximityProperties;
@@ -117,6 +121,15 @@ class CompliantContactManagerTest {
           contact_results) {
     manager.PackContactSolverResults(problem, num_contacts, sap_results,
                                      contact_results);
+  }
+
+  // TODO: change temporarily to CalcNonContactForces() for PR'ing before joint
+  // limits. So that unit test on limits still works.
+  static void CalcNonContactForcesExcludingJointLimits(
+      const CompliantContactManager<double>& manager,
+      const systems::Context<double>& context,
+      MultibodyForces<double>* forces) {
+    manager.CalcNonContactForcesExcludingJointLimits(context, forces);
   }
 };
 
@@ -1103,26 +1116,61 @@ class KukaIiwaArmTests : public ::testing::Test {
     plant_.SetDiscreteUpdateManager(std::move(owned_contact_manager));
 
     context_ = plant_.CreateDefaultContext();
-    SetArbitraryState(plant_, context_.get());
+    SetArbitraryNonZeroActuation(plant_, context_.get());
+    SetArbitraryState(plant_, context_.get());    
+  }
+
+  // Fixes all input ports to have zero actuation.
+  void SetArbitraryNonZeroActuation(const MultibodyPlant<double>& plant,
+                        Context<double>* context) const {
+    const VectorX<double> tau_arm = VectorX<double>::LinSpaced(
+        plant.num_actuated_dofs(arm_model), 10.0, 1000.0);
+    const VectorX<double> tau_gripper = VectorX<double>::LinSpaced(
+        plant.num_actuated_dofs(gripper_model), 10.0, 1000.0);
+    plant.get_actuation_input_port(arm_model).FixValue(context, tau_arm);
+    plant.get_actuation_input_port(gripper_model)
+        .FixValue(context, tau_gripper);
+  }
+
+  MatrixXd CalcLinearDynamicsMatrixIncludingImplicitDampingContribution()
+      const {
+    const int nv = plant_.num_velocities();
+    MatrixXd A(nv, nv);
+    plant_.CalcMassMatrix(*context_, &A);
+    // Include term due to the implicit treatment of dissipation.
+    VectorXd damping = VectorXd::Zero(plant_.num_velocities());
+    for (JointIndex joint_index(0); joint_index < plant_.num_joints();
+         ++joint_index) {
+      const Joint<double>& joint = plant_.get_joint(joint_index);
+      if (joint.num_velocities() > 0) {  // skip welds.
+        const VectorXd& joint_damping = joint.damping_vector();
+        // For this model we expect 1 DOF revolute and prismatic joints only.
+        //ASSERT_EQ(joint_damping.size(), 1);
+        //ASSERT_EQ(joint.num_velocities(), 1);
+        damping(joint.velocity_start()) = joint_damping(0);
+      }
+    }
+    A.diagonal() += plant_.time_step() * damping;
+    return A;
   }
 
  private:
   void LoadIiwaWithGripper(MultibodyPlant<double>* plant) {
     DRAKE_DEMAND(plant != nullptr);
-    const char kArmSdfPath[] =
-        "drake/manipulation/models/iiwa_description/sdf/"
-        "iiwa14_no_collision.sdf";
+    const char kArmFilePath[] =
+        "drake/manipulation/models/iiwa_description/urdf/"
+        "iiwa14_no_collision.urdf";
 
-    const char kWsg50SdfPath[] =
+    const char kWsg50FilePath[] =
         "drake/manipulation/models/wsg_50_description/sdf/schunk_wsg_50.sdf";
 
     Parser parser(plant);
-    arm_model = parser.AddModelFromFile(FindResourceOrThrow(kArmSdfPath));
+    arm_model = parser.AddModelFromFile(FindResourceOrThrow(kArmFilePath));
 
     // Add the gripper.
-    gripper_model = parser.AddModelFromFile(FindResourceOrThrow(kWsg50SdfPath));
+    gripper_model = parser.AddModelFromFile(FindResourceOrThrow(kWsg50FilePath));
 
-    const auto& base_body = plant->GetBodyByName("iiwa_link_0", arm_model);
+    const auto& base_body = plant->GetBodyByName("base", arm_model);
     const auto& end_effector = plant->GetBodyByName("iiwa_link_7", arm_model);
     const auto& gripper_body = plant->GetBodyByName("body", gripper_model);
     plant->WeldFrames(plant->world_frame(), base_body.body_frame());
@@ -1163,11 +1211,7 @@ class KukaIiwaArmTests : public ::testing::Test {
     }
   }
 
- protected:
-  VectorXd LinSpaced(int size, double low, double high) {
-    return VectorXd::LinSpaced(size, low, high);
-  }
-
+ protected:  
   const int kNumJoints = 9;
   const double kTimeStep{0.015};
   const VectorXd kRotorInertias{VectorXd::LinSpaced(kNumJoints, 0.1, 12.0)};
@@ -1183,7 +1227,8 @@ TEST_F(KukaIiwaArmTests, CalcLinearDynamicsMatrix) {
   EXPECT_EQ(plant_.num_velocities(), kNumJoints);
 
   const std::vector<MatrixXd> A =
-      CompliantContactManagerTest::CalcLinearDynamicsMatrix(*manager_, *context_);
+      CompliantContactManagerTest::CalcLinearDynamicsMatrix(*manager_,
+                                                            *context_);
   const int nv = plant_.num_velocities();
   MatrixXd Adense = MatrixXd::Zero(nv, nv);
   const MultibodyTreeTopology& topology =
@@ -1193,10 +1238,35 @@ TEST_F(KukaIiwaArmTests, CalcLinearDynamicsMatrix) {
     const int tree_nv = topology.num_tree_velocities(t);
     Adense.block(tree_start, tree_start, tree_nv, tree_nv) = A[t];
   }
-  MatrixXd Aexpected(nv, nv);
-  plant_.CalcMassMatrix(*context_, &Aexpected);
+  const MatrixXd Aexpected =
+      CalcLinearDynamicsMatrixIncludingImplicitDampingContribution();
   EXPECT_TRUE(
       CompareMatrices(Adense, Aexpected, kEps, MatrixCompareType::relative));
+}
+
+TEST_F(KukaIiwaArmTests, CalcFreeMotionVelocities) {
+  EXPECT_EQ(plant_.num_velocities(), kNumJoints);
+  const VectorXd v_star = CompliantContactManagerTest::CalcFreeMotionVelocities(
+      *manager_, *context_);
+
+  MultibodyForces<double> forces(plant_);
+  CompliantContactManagerTest::CalcNonContactForcesExcludingJointLimits(
+      *manager_, *context_, &forces);
+  const VectorXd zero_vdot = VectorXd::Zero(plant_.num_velocities());
+  const VectorXd k0 = -plant_.CalcInverseDynamics(*context_, zero_vdot, forces);
+
+  // A = M + dt*D
+  const MatrixXd A =
+      CalcLinearDynamicsMatrixIncludingImplicitDampingContribution();
+  const VectorXd a = A.ldlt().solve(k0);
+  const VectorXd& v0 = plant_.GetVelocities(*context_);
+  const VectorXd v_star_expected = v0 + plant_.time_step() * a;
+
+  PRINT_VAR(v_star.transpose());
+  PRINT_VAR((v_star-v_star_expected).norm());
+
+  EXPECT_TRUE(CompareMatrices(v_star, v_star_expected, 5.0 * kEps,
+                              MatrixCompareType::relative));
 }
 
 }  // namespace internal

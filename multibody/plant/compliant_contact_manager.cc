@@ -579,7 +579,9 @@ void CompliantContactManager<T>::CalcAccelerationsDueToNonContactForcesCache(
   CalcNonContactForcesExcludingJointLimits(
       context, &forward_dynamics_cache->forces);
 
-  const VectorX<T> diagonal_inertia = joint_damping_ * plant().time_step();
+  const VectorX<T> diagonal_inertia =
+      plant().EvalReflectedInertiaCache(context) +
+      joint_damping_ * plant().time_step();
 
   // We compute the articulated body inertia including the contribution of the
   // additional diagonal elements arising from the implicit treatment of joint
