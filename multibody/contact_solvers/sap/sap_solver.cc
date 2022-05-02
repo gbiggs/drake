@@ -144,7 +144,7 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
       converged = true;
       break;
     } else {
-      if (!parameters_.use_dense_algebra) {
+      if (!parameters_.use_dense_algebra && supernodal_solver == nullptr) {
         // Instantiate supernodal solver on the first iteration when needed. If
         // the stopping criteria is satisfied at k = 0 (good guess), then we
         // skip the expensive instantiation of the solver.
@@ -193,10 +193,6 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
         ell_decrement < parameters_.cost_abs_tolerance +
                             parameters_.cost_rel_tolerance * ell_scale &&
         alpha > 0.5;
-
-    //if (problem.num_constraints() == 4) {
-    //  throw std::runtime_error("Lets top here for now.");
-    //}
 
     ell_previous = ell;
   }
@@ -468,6 +464,8 @@ void SapSolver<T>::CalcSearchDirectionData(
     const systems::Context<T>& context,
     SuperNodalSolver* supernodal_solver,
     SapSolver<T>::SearchDirectionData* data) const {
+  if (!parameters_.use_dense_algebra)
+    DRAKE_DEMAND(supernodal_solver != nullptr);
   if (supernodal_solver != nullptr) {
     CallSuperNodalSolver(context, supernodal_solver, &data->dv);
   } else {

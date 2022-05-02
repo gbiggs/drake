@@ -154,6 +154,8 @@ class SapSolver {
       num_line_search_iters = 0;
       optimality_criterion_reached = false;
       cost_criterion_reached = false;
+      momentum_residual.clear();
+      momentum_scale.clear();
     }
     int num_iters{0};              // Number of Newton iterations.
     int num_line_search_iters{0};  // Total number of line search iterations.
@@ -265,33 +267,43 @@ class SapSolver {
       const SearchDirectionData& search_direction_data,
       systems::Context<T>* scratch_workspace) const;
 
+  // Computes a dense Hessian H(v) = A + Jᵀ⋅G(v)⋅J for the generalized
+  // velocities state stored in `context`.
   MatrixX<T> CalcDenseHessian(const systems::Context<T>& context) const;
 
   // Makes a new SuperNodalSolver compatible with the underlying SapModel.
   std::unique_ptr<SuperNodalSolver> MakeSuperNodalSolver() const;
 
-  // Evaluates the constraint's Hessian and updates `supernodal_solver`'s weight
-  // matrix.
+  // Evaluates the constraint's Hessian G(v) and updates `supernodal_solver`'s
+  // weight matrix so that we can later on solve the Newton system with Hessian
+  // H(v) = A + Jᵀ⋅G(v)⋅J.
   void UpdateSuperNodalSolver(const systems::Context<T>& context,
                               SuperNodalSolver* supernodal_solver) const;
 
-  // Updates the supernodal solver with the constraint's Hessian (function of
-  // `context`), factorizes it, and solves for the search direction `dv`.
+  // Updates the supernodal solver with the constraint's Hessian G(v),
+  // factorizes it, and solves for the search direction `dv`.
+  // @pre supernodal_solver and dv are not nullptr.
+  // @pre supernodal_solver was created with a call to MakeSuperNodalSolver().
   void CallSuperNodalSolver(const systems::Context<T>& context,
                             SuperNodalSolver* supernodal_solver,
-                            VectorX<T>* dv) const;                              
+                            VectorX<T>* dv) const;
 
   // Solves for dv using dense algebra, for debugging.
   // @pre context was created by the underlying SapModel.
   // TODO(amcastro-tri): Add AutoDiffXd support.
   void CallDenseSolver(const systems::Context<T>& context,
-                       VectorX<T>* dv) const;  
+                       VectorX<T>* dv) const;
 
   // This method performs one iteration of the SAP solver. It updates gradient
   // of the primal cost ∇ℓₚ, the cost's Hessian H and solves for the velocity
   // search direction dv = −H⁻¹⋅∇ℓₚ. The result is stored in `data` along with
   // additional derived quantities from dv.
+  // @param supernodal_solver If nullptr, this method uses dense algebra to
+  // compute the Hessian and factorize it. Otherwise, this method uses the
+  // supernodal solver provided.
   // @pre context was created by the underlying SapModel.
+  // @pre supernodal_solver must be a valid supernodal solver created with
+  // MakeSuperNodalSolver() when parameters_.use_dense_algebra = false.
   void CalcSearchDirectionData(const systems::Context<T>& context,
                                SuperNodalSolver* supernodal_solver,
                                SearchDirectionData* data) const;
@@ -319,4 +331,3 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
 
 DRAKE_DECLARE_CLASS_TEMPLATE_INSTANTIATIONS_ON_DEFAULT_NONSYMBOLIC_SCALARS(
     class ::drake::multibody::contact_solvers::internal::SapSolver);
-
