@@ -100,6 +100,12 @@ struct ContactProblemCache {
   std::vector<math::RotationMatrix<T>> R_WC;
 };
 
+struct TimingStats {
+    double sap_solver_time{0.0};
+    double discrete_update_time{0.0};
+    
+};
+
 // This class implements the interface given by DiscreteUpdateManager so that
 // contact computations can be consumed by MultibodyPlant.
 //

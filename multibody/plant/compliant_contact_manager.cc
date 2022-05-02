@@ -21,6 +21,7 @@
 #include "drake/multibody/plant/multibody_plant.h"
 #include "drake/multibody/triangle_quadrature/gaussian_triangle_quadrature_rule.h"
 #include "drake/systems/framework/context.h"
+#include "drake/multibody/plant/stop_watch.h"
 
 #include <iostream>
 #define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
@@ -37,6 +38,7 @@ using drake::multibody::contact_solvers::internal::SapSolverResults;
 using drake::multibody::contact_solvers::internal::SapFrictionConeConstraint;
 using drake::multibody::contact_solvers::internal::SapLimitConstraint;
 using drake::multibody::internal::MultibodyTreeTopology;
+using drake::multibody::internal::StopWatch;
 using drake::systems::Context;
 
 namespace drake {
@@ -674,6 +676,7 @@ void CompliantContactManager<T>::DoCalcContactSolverResults(
   const auto v0 = x0.bottomRows(this->plant().num_velocities());
 
   // Solve contact problem.
+  StopWatch stop_watch;
   SapSolver<T> sap;
   SapSolverResults<T> sap_results;
   SapSolverParameters  params;
@@ -681,11 +684,13 @@ void CompliantContactManager<T>::DoCalcContactSolverResults(
   params.rel_tolerance = 1e-6;
   sap.set_parameters(params);
   const drake::multibody::contact_solvers::internal::SapSolverStatus status =
-      sap.SolveWithGuess(sap_problem, v0, &sap_results);        
+      sap.SolveWithGuess(sap_problem, v0, &sap_results);
   if (status !=
       drake::multibody::contact_solvers::internal::SapSolverStatus::kSuccess) {
     throw std::runtime_error("SAP solver failed.");
-  }  
+  }
+  const double sap_solver_time = stop_watch.Elapsed();
+  (void)sap_solver_time;
 
   const std::vector<internal::DiscreteContactPair<T>>& discrete_pairs =
       EvalDiscreteContactPairs(context);
