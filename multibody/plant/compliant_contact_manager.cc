@@ -14,6 +14,7 @@
 #include "drake/math/rotation_matrix.h"
 #include "drake/multibody/contact_solvers/contact_solver_utils.h"
 #include "drake/multibody/contact_solvers/sap/sap_contact_problem.h"
+#include "drake/multibody/contact_solvers/sap/sap_coupler_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_friction_cone_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_limit_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_solver.h"
@@ -36,6 +37,7 @@ using drake::multibody::contact_solvers::internal::SapSolver;
 using drake::multibody::contact_solvers::internal::SapSolverParameters;
 using drake::multibody::contact_solvers::internal::SapSolverResults;
 using drake::multibody::contact_solvers::internal::SapFrictionConeConstraint;
+using drake::multibody::contact_solvers::internal::SapCouplerConstraint;
 using drake::multibody::contact_solvers::internal::SapLimitConstraint;
 using drake::multibody::internal::MultibodyTreeTopology;
 using drake::multibody::internal::StopWatch;
@@ -56,6 +58,17 @@ AccelerationsDueToExternalForcesCache<T>::AccelerationsDueToExternalForcesCache(
 
 template <typename T>
 CompliantContactManager<T>::~CompliantContactManager() {}
+
+template <typename T>
+void CompliantContactManager<T>::AddCouplerConstraint(
+    const Joint<T>& joint0, const Joint<T>& joint1, const T& gear_ratio,
+    const T& stiffness, const T& dissipation_time_scale) {
+  DRAKE_THROW_UNLESS(joint0.num_velocities() == 1);
+  DRAKE_THROW_UNLESS(joint1.num_velocities() == 1);
+  coupler_constraints_info_.push_back(
+      CouplerConstraintInfo{joint0.velocity_start(), joint1.velocity_start(),
+                            gear_ratio, stiffness, dissipation_time_scale});
+}
 
 template <typename T>
 void CompliantContactManager<T>::DeclareCacheEntries() {
@@ -848,6 +861,53 @@ void CompliantContactManager<T>::AddLimitConstraints(
 }
 
 template <typename T>
+void CompliantContactManager<T>::AddCouplerConstraints(
+    const systems::Context<T>& context, SapContactProblem<T>* problem) const {
+  DRAKE_DEMAND(problem != nullptr);
+
+  // Previous time step positions.
+  const VectorX<T> q0 = plant().GetPositions(context);  
+
+  for (const CouplerConstraintInfo& info : coupler_constraints_info_) {
+    const TreeIndex c0 = tree_topology().velocity_to_tree_index(info.q0);
+    const TreeIndex c1 = tree_topology().velocity_to_tree_index(info.q1);
+
+    // Sanity check.
+    DRAKE_DEMAND(c0.is_valid() && c1.is_valid());
+
+    // Constraint function.
+    const T g0 = q0[info.q0] - info.gear_ratio * q0[info.q1];
+
+    // TODO: expose this parameter.
+    const double beta = 0.1;
+
+    const typename SapCouplerConstraint<T>::Parameters parameters{
+        info.gear_ratio, info.stiffness, info.dissipation_time_scale, beta};
+
+    if (c0 == c1) {
+      const int nv = tree_topology().num_tree_velocities(c0);
+      MatrixX<T> J = MatrixX<T>::Zero(1, nv);
+      // J = dg/dv
+      J(0, info.q0) = 1.0;
+      J(0, info.q1) = -info.gear_ratio;
+      
+      problem->AddConstraint(std::make_unique<SapCouplerConstraint<T>>(
+          parameters, c0, J, g0));
+    } else {
+      const int nv0 = tree_topology().num_tree_velocities(c0);
+      const int nv1 = tree_topology().num_tree_velocities(c1);
+      MatrixX<T> J0 = MatrixX<T>::Zero(1, nv0);
+      MatrixX<T> J1 = MatrixX<T>::Zero(1, nv1);
+      J0(0, info.q0) = 1.0;
+      J1(0, info.q1) = -info.gear_ratio;
+      problem->AddConstraint(std::make_unique<SapCouplerConstraint<T>>(
+          parameters, c0, c1, J0, J1, g0));
+    }
+  }
+
+}
+
+template <typename T>
 void CompliantContactManager<T>::CalcContactProblemCache(
     const systems::Context<T>& context, ContactProblemCache<T>* cache) const {
   SapContactProblem<T>& problem = *cache->sap_problem;
@@ -858,6 +918,7 @@ void CompliantContactManager<T>::CalcContactProblemCache(
   problem.Reset(std::move(A), std::move(v_star));
   cache->R_WC = AddContactConstraints(context, &problem);
   AddLimitConstraints(context, &problem);
+  AddCouplerConstraints(context, &problem);
 }
 
 template <typename T>
