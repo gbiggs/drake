@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <type_traits>
 
 #include "drake/common/eigen_types.h"
 #include "drake/common/scope_exit.h"
@@ -140,6 +141,11 @@ CompliantContactManager<T>::CalcContactKinematics(
   const std::vector<internal::DiscreteContactPair<T>>& contact_pairs =
       EvalDiscreteContactPairs(context);
   const int num_contacts = contact_pairs.size();
+
+  // N.B. Start stop watch after getting discrete pairs to avoid counting them
+  // twice.
+  StopWatch stop_watch;
+
   std::vector<ContactPairKinematics<T>> contact_kinematics;
   contact_kinematics.reserve(num_contacts);
 
@@ -221,6 +227,8 @@ CompliantContactManager<T>::CalcContactKinematics(
                                     std::move(R_WC));
   }
 
+  stats_.contact_kinematics_time += stop_watch.Elapsed();
+
   return contact_kinematics;
 }
 
@@ -292,6 +300,8 @@ void CompliantContactManager<T>::CalcDiscreteContactPairs(
   plant().ValidateContext(context);
   DRAKE_DEMAND(contact_pairs != nullptr);
 
+  StopWatch stop_watch;
+
   contact_pairs->clear();
   if (plant().num_collision_geometries() == 0) return;
 
@@ -335,6 +345,8 @@ void CompliantContactManager<T>::CalcDiscreteContactPairs(
       contact_model == ContactModel::kHydroelasticWithFallback) {
     AppendDiscreteContactPairsForHydroelasticContact(context, contact_pairs);
   }
+
+  stats_.discrete_pairs_time += stop_watch.Elapsed();
 }
 
 template <typename T>
@@ -556,6 +568,9 @@ void CompliantContactManager<T>::CalcAccelerationsDueToNonContactForcesCache(
     const systems::Context<T>& context,
     AccelerationsDueToExternalForcesCache<T>* forward_dynamics_cache)
     const {
+
+  StopWatch stop_watch;    
+
   // To overcame issue #12786, we use this additional cache entry
   // to detect algebraic loops.
   systems::CacheEntryValue& value =
@@ -614,12 +629,15 @@ void CompliantContactManager<T>::CalcAccelerationsDueToNonContactForcesCache(
 
   // Mark the end of the computation.
   evaluation_in_progress = false;
+
+  stats_.free_motion_accelerations_time += stop_watch.Elapsed();
 }
 
 template <typename T>
 void CompliantContactManager<T>::CalcFreeMotionVelocities(
     const systems::Context<T>& context, VectorX<T>* v_star) const {
   DRAKE_DEMAND(v_star != nullptr);
+  StopWatch stop_watch;
   // N.B. Forces are evaluated at the previous time step state. This is
   // consistent with the explicit Euler and symplectic Euler schemes.
   // TODO(amcastro-tri): Implement free-motion velocities update based on the
@@ -631,6 +649,7 @@ void CompliantContactManager<T>::CalcFreeMotionVelocities(
       context.get_discrete_state(this->multibody_state_index()).value();
   const auto v0 = x0.bottomRows(this->plant().num_velocities());
   *v_star = v0 + dt * vdot0;
+  stats_.free_motion_velocities_time += stop_watch.Elapsed();
 }
 
 template <typename T>
@@ -679,6 +698,9 @@ template <typename T>
 void CompliantContactManager<T>::DoCalcContactSolverResults(
     const systems::Context<T>& context,
     contact_solvers::internal::ContactSolverResults<T>* contact_results) const {
+
+  StopWatch contact_results_stopwatch;
+
   const ContactProblemCache<T>& contact_problem_cache =
       EvalContactProblemCache(context);
   const SapContactProblem<T>& sap_problem = *contact_problem_cache.sap_problem;
@@ -703,8 +725,12 @@ void CompliantContactManager<T>::DoCalcContactSolverResults(
       drake::multibody::contact_solvers::internal::SapSolverStatus::kSuccess) {
     throw std::runtime_error("SAP solver failed.");
   }
-  const double sap_solver_time = stop_watch.Elapsed();
-  (void)sap_solver_time;
+  stats_.solve_problem_time += stop_watch.Elapsed();
+  stats_.num_iters += sap.get_statistics().num_iters;
+  stats_.num_ls_iters += sap.get_statistics().num_line_search_iters;
+  if constexpr (std::is_same_v<T, double>) {
+    stats_.sap_stats.push_back(sap.get_statistics());
+  }
 
   const std::vector<internal::DiscreteContactPair<T>>& discrete_pairs =
       EvalDiscreteContactPairs(context);
@@ -712,6 +738,8 @@ void CompliantContactManager<T>::DoCalcContactSolverResults(
 
   PackContactSolverResults(sap_problem, num_contacts, sap_results,
                            contact_results);
+
+  stats_.contact_results_time += contact_results_stopwatch.Elapsed();
 }
 
 template <typename T>
@@ -720,6 +748,9 @@ void CompliantContactManager<T>::PackContactSolverResults(
     const SapSolverResults<T>& sap_results,
     contact_solvers::internal::ContactSolverResults<T>* contact_results) const {
   DRAKE_DEMAND(contact_results != nullptr);
+
+  StopWatch stop_watch;
+
   contact_results->Resize(plant().num_velocities(), num_contacts);
   contact_results->v_next = sap_results.v;
   // We added all contact constraints first and therefore we know the head of
@@ -754,6 +785,8 @@ void CompliantContactManager<T>::PackContactSolverResults(
       tau_contact.segment(v_start, nv) += Jic.transpose() * fi;
     }
   }
+
+  stats_.pack_results_time += stop_watch.Elapsed();
 }
 
 template <typename T>
@@ -916,10 +949,13 @@ void CompliantContactManager<T>::CalcContactProblemCache(
   CalcLinearDynamicsMatrix(context, &A);
   VectorX<T> v_star;
   CalcFreeMotionVelocities(context, &v_star);
+  // N.B. We exclude time to compute v* from actually making the problem.
+  StopWatch stop_watch;
   problem.Reset(std::move(A), std::move(v_star));
   cache->R_WC = AddContactConstraints(context, &problem);
   AddLimitConstraints(context, &problem);
   AddCouplerConstraints(context, &problem);
+  stats_.make_problem_time += stop_watch.Elapsed();
 }
 
 template <typename T>
@@ -935,6 +971,9 @@ template <typename T>
 void CompliantContactManager<T>::DoCalcDiscreteValues(
     const drake::systems::Context<T>& context,
     drake::systems::DiscreteValues<T>* updates) const {
+  
+  StopWatch stop_watch;  
+
   const contact_solvers::internal::ContactSolverResults<T>& results =
       this->EvalContactSolverResults(context);
 
@@ -955,6 +994,8 @@ void CompliantContactManager<T>::DoCalcDiscreteValues(
   VectorX<T> x_next(plant().num_multibody_states());
   x_next << q_next, v_next;
   updates->set_value(this->multibody_state_index(), x_next);
+
+  stats_.discrete_update_time += stop_watch.Elapsed();
 }
 
 template <typename T>

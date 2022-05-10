@@ -20,6 +20,34 @@ namespace drake {
 namespace multibody {
 namespace internal {
 
+struct ManagerStats {
+  //DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ManagerStats);
+
+  using SolverStats = contact_solvers::internal::SapSolver<double>::SolverStats;
+
+  // Stats per each discrete update.
+  std::vector<SolverStats> sap_stats;
+
+  // Total SAP iterations.  
+  int num_iters{0};
+  int num_ls_iters{0};
+
+  // Accumulated time during the lifetime of the manager.
+  double free_motion_accelerations_time{0.0};
+  double free_motion_velocities_time{0.0};
+  double discrete_pairs_time{0.0};
+  double contact_kinematics_time{0.0};
+  double make_problem_time{0.0};
+  double solve_problem_time{0.0};
+  double pack_results_time{0.0};
+
+  // N.B. These measurements depends on everything in the cache being dirty.
+  // If someone for instance pulled the contact results port, then this would
+  // cost zero time.
+  double discrete_update_time{0.0};
+  double contact_results_time{0.0};
+};
+
 template <typename T>
 struct ContactPairKinematics {
   DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(ContactPairKinematics);
@@ -149,6 +177,8 @@ class CompliantContactManager final
   void AddCouplerConstraint(const Joint<T>& joint0, const Joint<T>& joint1,
                             const T& gear_ratio, const T& stiffness,
                             const T& dissipation_time_scale);
+
+  const ManagerStats& stats() const { return stats_; }
 
  private:
   struct CouplerConstraintInfo {
@@ -346,6 +376,8 @@ class CompliantContactManager final
   VectorX<T> joint_damping_;
 
   std::vector<CouplerConstraintInfo> coupler_constraints_info_;
+
+  mutable ManagerStats stats_;
 };
 
 }  // namespace internal
