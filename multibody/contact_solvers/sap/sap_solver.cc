@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "drake/common/default_scalars.h"
+#include "drake/math/linear_solve.h"
 #include "drake/multibody/contact_solvers/supernodal_solver.h"
 
 namespace drake {
@@ -311,7 +312,7 @@ std::pair<T, int> SapSolver<T>::PerformBackTrackingLineSearch(
   T ell_prev = ell;
 
   int iteration = 1;
-  for (; iteration <= max_iterations; ++iteration) {
+  for (; iteration < max_iterations; ++iteration) {
     alpha *= rho;
     ell = CalcCostAlongLine(context, search_direction_data, alpha, scratch);
     // We scan discrete values of alpha from alpha_max to zero and seek for the
@@ -402,22 +403,22 @@ void SapSolver<T>::CallDenseSolver(const Context<T>& context,
   const MatrixX<T> H = CalcDenseHessian(context);
 
   // Factorize Hessian.
-  // TODO(amcastro-tri): Make use of mat::SolveLinearSystem() for a quick and
-  // dirty way to support AutoDiffXd, at least to build unit tests.
+  // TODO(amcastro-tri): when T = AutoDiffXd propagate gradients analytically
+  // using the chain rule so that here we can use T = double for performance.
   // N.B. The support for dense algebra is mostly for testing purposes, even
   // though the computation of the dense H (and in particular of the Jᵀ⋅G⋅J
   // term) is very costly. Therefore below we decided to trade off speed for
   // stability when choosing to use an LDLT decomposition instead of a slightly
   // faster, though less stable, LLT decomposition.
-  const Eigen::LDLT<MatrixX<T>> Hldlt(H);
-  if (Hldlt.info() != Eigen::Success) {
+  const math::LinearSolver<Eigen::LDLT, MatrixX<T>> H_ldlt(H);
+  if (H_ldlt.eigen_linear_solver().info() != Eigen::Success) {
     // TODO(amcastro-tri): Unit test this condition.
     throw std::runtime_error("Dense LDLT factorization of the Hessian failed.");
   }
 
   // Compute search direction.
   const VectorX<T> rhs = -model_->EvalCostGradient(context);
-  *dv = Hldlt.solve(rhs);
+  *dv = H_ldlt.Solve(rhs);
 }
 
 template <typename T>
@@ -464,12 +465,11 @@ void SapSolver<T>::CalcSearchDirectionData(
     const systems::Context<T>& context,
     SuperNodalSolver* supernodal_solver,
     SapSolver<T>::SearchDirectionData* data) const {
-  if (!parameters_.use_dense_algebra)
-    DRAKE_DEMAND(supernodal_solver != nullptr);
-  if (supernodal_solver != nullptr) {
+  DRAKE_DEMAND(parameters_.use_dense_algebra || (supernodal_solver != nullptr));
+  // Update search direction dv.
+  if (!parameters_.use_dense_algebra) {
     CallSuperNodalSolver(context, supernodal_solver, &data->dv);
   } else {
-    // Update search direction dv.
     CallDenseSolver(context, &data->dv);
   }
 

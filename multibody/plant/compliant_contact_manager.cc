@@ -693,6 +693,7 @@ void CompliantContactManager<T>::DoCalcContactSolverResults(
   SapSolver<T> sap;
   SapSolverResults<T> sap_results;
   SapSolverParameters  params;
+  params.ls_max_iterations = 100;
   params.ls_alpha_max = 1.0 / params.ls_rho;
   params.rel_tolerance = 1e-6;
   sap.set_parameters(params);
