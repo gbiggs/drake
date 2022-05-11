@@ -106,6 +106,8 @@ struct SapSolverParameters {
   double ls_c{1.0e-4};        // Armijo's criterion parameter.
   double ls_rho{0.8};         // Backtracking search parameter.
 
+  bool exact_line_search{true};
+
   // Maximum line search parameter allowed.
   // Using this value of ls_alpha_max ensures that SAP's line search uses alpha
   // = 1.0 on the second iteration. This is particularly important to avoid
@@ -250,7 +252,9 @@ class SapSolver {
   // @pre context was created by the underlying SapModel.
   T CalcCostAlongLine(const systems::Context<T>& context,
                       const SearchDirectionData& search_direction_data,
-                      const T& alpha, systems::Context<T>* scratch) const;
+                      const T& alpha, systems::Context<T>* scratch,
+                      T* dell_dalpha = nullptr,
+                      T* d2ell_dalpha2 = nullptr) const;
 
   // Approximation to the 1D minimization problem α = argmin ℓ(α) = ℓ(v + αΔv)
   // over α. We define ϕ(α) = ℓ₀ + α c ℓ₀', where ℓ₀ = ℓ(0), ℓ₀' = dℓ/dα(0) and
@@ -269,6 +273,11 @@ class SapSolver {
   // @pre both context and scratch_workspace were created by the underlying
   // SapModel.
   std::pair<T, int> PerformBackTrackingLineSearch(
+      const systems::Context<T>& context,
+      const SearchDirectionData& search_direction_data,
+      systems::Context<T>* scratch_workspace) const;
+
+  std::pair<T, int> PerformExactLineSearch(
       const systems::Context<T>& context,
       const SearchDirectionData& search_direction_data,
       systems::Context<T>* scratch_workspace) const;

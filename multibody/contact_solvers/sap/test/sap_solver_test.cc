@@ -1,11 +1,5 @@
 #include "drake/multibody/contact_solvers/sap/sap_solver.h"
 
-// TODO(amcastro-tri): While many of tests in this file verify the correctness
-// of the solution, it might not be enough to ensure the entire implementation
-// is correct. E.g. miscalculation of the Hessian could lead to slower
-// convergence. Consider more fine grained unit tests, especially for the
-// Hessian and other gradients.
-
 #include <memory>
 
 #include <gtest/gtest.h>
@@ -17,24 +11,26 @@
 #include "drake/multibody/contact_solvers/contact_solver_utils.h"
 #include "drake/multibody/contact_solvers/sap/sap_friction_cone_constraint.h"
 #include "drake/multibody/contact_solvers/sap/sap_solver_results.h"
+#include "drake/multibody/contact_solvers/supernodal_solver.h"
 #include "drake/multibody/contact_solvers/system_dynamics_data.h"
 #include "drake/systems/framework/context.h"
-#include "drake/multibody/contact_solvers/supernodal_solver.h"
 
+using drake::systems::Context;
 using Eigen::Matrix3d;
 using Eigen::MatrixXd;
 using Eigen::Vector2d;
 using Eigen::Vector3d;
 using Eigen::Vector4d;
 using Eigen::VectorXd;
-using drake::systems::Context;
 
 namespace drake {
 namespace multibody {
 namespace contact_solvers {
 namespace internal {
 
-struct SapSolverTester {
+// Friend struct to grant access to SapSolver's private functions for testing.
+class SapSolverTester {
+ public:
   static std::unique_ptr<SuperNodalSolver> MakeSuperNodalSolver(
       const SapSolver<double>& sap) {
     return sap.MakeSuperNodalSolver();
@@ -54,7 +50,7 @@ struct SapSolverTester {
       const SapSolver<double>& sap, const systems::Context<double>& context) {
     return sap.CalcDenseHessian(context);
   }
-}; 
+};
 
 constexpr double kEps = std::numeric_limits<double>::epsilon();
 // Suggested value for the dimensionless parameter used in the regularization of
@@ -370,7 +366,7 @@ GTEST_TEST(PizzaSaver, ConvergenceWithExactGuess) {
 // Makes a problem for which we know the solution will be in stiction. If Mz <
 // mu * m * g * R, the saver should be in stiction (that is, the sliding
 // velocity should be smaller than the regularization parameter). Otherwise the
-// saver will start sliding. For this setup the transition occurs at
+// saver will start sliding. For this set up the transition occurs at
 // M_transition = mu * m * g * R = 30.
 PizzaSaverProblem MakeStictionProblem() {
   const double dt = 0.01;
@@ -467,6 +463,14 @@ GTEST_TEST(PizzaSaver, StictionAtTightOptimalityTolerance) {
   params.abs_tolerance = 1.0e-20;
   params.rel_tolerance = 1.0e-20;
   params.ls_max_iterations = 40;
+  // Once SAP's state is in the stiction region, SAP's cost is quadratic and the
+  // Newton's method will converge in the next iteration with line search
+  // parameter alpha = 1. To trigger the "cost criterion", below we set a value
+  // of ls_alpha_max such that the backtracking line search nevers tries
+  // alpha = 1. This is of course an overly adverse condition we force for
+  // testing purposes. In practice, SAP's default parameters are set so that the
+  // backtracking line search does go through alpha=1.
+  params.ls_alpha_max = 1.0 / params.ls_rho + 0.1;
   // Inform the unit test we want to verify this condition.
   const bool cost_criterion_reached = true;
   // Use a reasonable tolerance to verify the accuracy of the solution.
@@ -560,7 +564,7 @@ GTEST_TEST(PizzaSaver, Sliding) {
 // Verify we can also get a solution in the near-rigid regime. To trigger this
 // regime we set a very large contact stiffness. In particular, for this test we
 // apply a moment Mz such that Mz < mu * m * g * R, and the saver is in
-// stiction. For this setup the transition occurs at
+// stiction. For this set up the transition occurs at
 // M_transition = mu * m * g * R = 30.
 GTEST_TEST(PizzaSaver, NearRigidStiction) {
   const double dt = 0.01;
@@ -672,7 +676,7 @@ class LimitConstraint final : public SapConstraint<T> {
   // Constructs a limit constraint on `clique` with lower limit vl, upper
   // limit vu and regularization R.
   LimitConstraint(int clique, const VectorX<T>& vl, const VectorX<T>& vu,
-                  const VectorX<T> R)
+                  VectorX<T> R)
       : SapConstraint<T>(
             clique,
             ConcatenateVectors(vl, vu) /* Dummy vector of the right size. */,
@@ -681,6 +685,7 @@ class LimitConstraint final : public SapConstraint<T> {
         vhat_(ConcatenateVectors(vl, -vu)) {
     DRAKE_DEMAND(vl.size() == vu.size());
     DRAKE_DEMAND(R_.size() == 2 * vl.size());
+    DRAKE_DEMAND((vl.array() <= vu.array()).all());
   }
 
   VectorX<T> CalcBiasTerm(const T&, const T&) const final { return vhat_; }
@@ -688,12 +693,12 @@ class LimitConstraint final : public SapConstraint<T> {
     return R_;
   }
 
-  // For this constraint the projection is the identity operation.
+  // For this constraint the projection is γ = P(y) = max(0, y), componentwise.
   void Project(const Eigen::Ref<const VectorX<double>>& y,
                const Eigen::Ref<const VectorX<double>>& R,
                EigenPtr<VectorX<double>> gamma,
                MatrixX<double>* dPdy) const final {
-    // For this constrain the number of equations equals the number of
+    // For this constraint the number of equations equals the number of
     // velocities in the constrained clique.
     const int nv = this->num_constraint_equations();
     if (dPdy != nullptr) {
@@ -724,19 +729,20 @@ class LimitConstraint final : public SapConstraint<T> {
     return v;
   }
 
-  VectorX<T> CalcConstraintFunction(const VectorX<T>& ql, const VectorX<T>& qu,
-                                    const VectorX<T>& q) const {
-    DRAKE_DEMAND(ql.size() == q.size());
-    DRAKE_DEMAND(qu.size() == q.size());
-    const int nq = q.size();
-    const VectorX<T> g = (VectorX<T>(2 * nq) << q - ql, qu - q).finished();
+  static VectorX<T> CalcConstraintFunction(const VectorX<T>& vl,
+                                           const VectorX<T>& vu,
+                                           const VectorX<T>& v) {
+    DRAKE_DEMAND(vl.size() == v.size());
+    DRAKE_DEMAND(vu.size() == v.size());
+    const int nv = v.size();
+    const VectorX<T> g = (VectorX<T>(2 * nv) << v - vl, vu - v).finished();
     return g;
   }
 
-  MatrixX<T> CalcConstraintJacobian(int nq) const {
-    MatrixX<T> J = MatrixX<T>::Identity(2 * nq, nq);
-    J.topRows(nq) = MatrixX<T>::Identity(nq, nq);
-    J.bottomRows(nq) = -MatrixX<T>::Identity(nq, nq);
+  static MatrixX<T> CalcConstraintJacobian(int nv) {
+    MatrixX<T> J = MatrixX<T>::Identity(2 * nv, nv);
+    J.topRows(nv) = MatrixX<T>::Identity(nv, nv);
+    J.bottomRows(nv) = -MatrixX<T>::Identity(nv, nv);
     return J;
   }
 
@@ -745,11 +751,11 @@ class LimitConstraint final : public SapConstraint<T> {
 };
 
 // This fixture is used to test the number of iterations performed by SAP's
-// Newton solver. We setup a contact problem for which the solution is v = v*,
+// Newton solver. We set up a contact problem for which the solution is v = v*,
 // the "free-motion" velocities. The problem has three cliques and a single
 // LimitConstraint on the first clique. We can test how the Newton iterations
 // perform by changing the initial guess. For instance, when the initial guess
-// is whithin the contraint's bounds, the cost is quadratic and we expect SAP to
+// is within the contraint's bounds, the cost is quadratic and we expect SAP to
 // converge in a single Newton iteration.
 class SapNewtonIterationTest : public ::testing::Test {
  public:
@@ -759,7 +765,8 @@ class SapNewtonIterationTest : public ::testing::Test {
 
     // Arbitrary non-identity SPD matrices to build the dynamics matrix A.
     // clang-format off
-    const int num_velocities{9};
+    constexpr int num_velocities{9};  // Total number of velocities.
+    constexpr int clique1_nv{3};  // Number of velocities for clique 1.
     const Eigen::Matrix2d S22 =
       (Eigen::Matrix2d() << 2, 1,
                             1, 2).finished();
@@ -781,19 +788,29 @@ class SapNewtonIterationTest : public ::testing::Test {
     // We make a v* that is inside the "box" specified by vl and vu.
     VectorXd v_star =
         VectorXd::LinSpaced(num_velocities, 1., 1. * num_velocities);
-    v_star.segment<3>(2) = 0.5 * (vl_ + vu_);
+    // The limit constraint applies to the second clique (clique=1) only. This
+    // clique has clique1_nv = 3 degrees of freedom starting at entry 2 in the
+    // full vector of generalized velocities. Thus the .segment<clique1_nv>(2)
+    // below:
+    auto v_star_clique1 =
+        v_star.segment<clique1_nv>(2);  // Velocities for clique 1.
+    v_star_clique1 = 0.5 * (vl_ + vu_);
     v_star_.resize(num_velocities);
     v_star_ = v_star;
 
     std::vector<MatrixXd> A = {S22, S33, S44};
     sap_problem_->Reset(std::move(A), std::move(v_star));
 
-    const VectorXd R = VectorXd::Constant(6, 1.0e-3);
+    constexpr int num_limit_constraint_equations = 2 * clique1_nv;
+    VectorXd R = VectorXd::Constant(num_limit_constraint_equations, 1.0e-3);
     sap_problem_->AddConstraint(
         std::make_unique<LimitConstraint<double>>(1, vl_, vu_, std::move(R)));
   }
 
-  void VerifySupernodalHessian(const SapSolver<double>& sap, const VectorXd& v_guess) const {
+  // We verify our supernodal algebra by comparing the Hessian reconstructed
+  // with the supernodal solver against our already tested dense algebra.
+  void VerifySupernodalHessian(const SapSolver<double>& sap,
+                               const VectorXd& v_guess) const {
     // Verify Hessian obtained with sparse supernodal algebra.
     std::unique_ptr<SuperNodalSolver> supernodal_solver =
         SapSolverTester::MakeSuperNodalSolver(sap);
@@ -807,6 +824,37 @@ class SapNewtonIterationTest : public ::testing::Test {
     const MatrixXd H_expected =
         SapSolverTester::CalcDenseHessian(sap, *context);
     EXPECT_TRUE(CompareMatrices(H, H_expected, 3.0 * kEps,
+                                MatrixCompareType::relative));
+  }
+
+  // Compute next step velocity using the provide set of `params` and the given
+  // guess `v_guess`.
+  VectorXd SolveWithGuess(const SapSolverParameters& params,
+                          const VectorXd& v_guess) const {
+    SapSolver<double> sap;
+    sap.set_parameters(params);
+    SapSolverResults<double> result;
+    const SapSolverStatus status =
+        sap.SolveWithGuess(*sap_problem_, v_guess, &result);
+    EXPECT_EQ(status, SapSolverStatus::kSuccess);
+    return result.v;
+  }
+
+  // Compare solutions obtained with dense and supernodal algebra.
+  void CompareDenseAgainstSupernodal(const VectorXd& v_guess) const {
+    // Perform computation with supernodal algebra.
+    SapSolverParameters params_supernodal;
+    params_supernodal.use_dense_algebra = false;
+    const VectorXd v_supernodal = SolveWithGuess(params_supernodal, v_guess);
+
+    // Perform computation with dense algebra.
+    SapSolverParameters params_dense;
+    params_dense.use_dense_algebra = true;
+    const VectorXd v_dense = SolveWithGuess(params_dense, v_guess);
+
+    // We expected results computed with dense and supernodal algebra to match
+    // close to machine epsilon for this small problem.
+    EXPECT_TRUE(CompareMatrices(v_supernodal, v_dense, 5.0 * kEps,
                                 MatrixCompareType::relative));
   }
 
@@ -832,7 +880,7 @@ TEST_F(SapNewtonIterationTest, GuessIsTheSolution) {
   EXPECT_EQ(stats.num_iters, 0);
   EXPECT_TRUE(stats.optimality_criterion_reached);
 
-  // Since the initial guess is the solution to this problem, we exepct the
+  // Since the initial guess is the solution to this problem, we expect the
   // result ot be an exact copy of it. Constraints are not active and therefore
   // impulses are zero.
   EXPECT_EQ(result.v, v_guess);
@@ -849,10 +897,12 @@ TEST_F(SapNewtonIterationTest, GuessWithinLimits) {
   SapSolver<double> sap;
   SapSolverParameters params;
   // We setup the line search parameters so that the backtracking line-search
-  // tries alpha = ls_alpha_max = 1.0 / 0.8 = 1.25 and alpha = ls_alpha_max *
-  // ls_rho = 1.0. Since in this case the guess is withing the constraint
-  // limits, where th cost is exactly quadratic, one Newton iteration with alpha
-  // = 1 will achieve convergence within machine precision.
+  // tries alpha = 1.0. Since alpha_m = ls_alpha_max * ls_rho^m
+  // (m=0..ls_max_iterations), we set ls_alpha_max = 1.0/ls_rho so that alpha_1
+  // = 1.0 on the second line search iteration. Since in this case the guess is
+  // within the constraint limits, where the cost is exactly quadratic, one
+  // Newton iteration with alpha = 1 will achieve convergence within machine
+  // precision.
   params.ls_alpha_max = 1.0 / params.ls_rho;
   sap.set_parameters(params);
 
@@ -866,8 +916,8 @@ TEST_F(SapNewtonIterationTest, GuessWithinLimits) {
   EXPECT_EQ(status, SapSolverStatus::kSuccess);
 
   // Since we provide the guess to be within the limits, and we know the
-  // solution is v = v*, then we expect the solver achieve convergence in a
-  // single Newton iteration.
+  // solution is v = v*, we expect the solver achieve convergence in a single
+  // Newton iteration.
   const SapSolver<double>::SolverStats& stats = sap.get_statistics();
   EXPECT_EQ(stats.num_iters, 1);
   // We expect two backtracking line search iterations given ls_alpha_max != 1.
@@ -888,6 +938,9 @@ TEST_F(SapNewtonIterationTest, GuessWithinLimits) {
       3.0 * kEps, MatrixCompareType::absolute));
 
   VerifySupernodalHessian(sap, v_guess);
+
+  // Verify solution computed with dense and supernodal algebra match.
+  CompareDenseAgainstSupernodal(v_guess);
 }
 
 // For this problem when the initial guess is outside the constraint's limits
@@ -905,7 +958,7 @@ TEST_F(SapNewtonIterationTest, GuessOutsideLimits) {
   // Arbitrary initial guess outside the constraint bounds to force several
   // Newton iterations.
   VectorXd v_guess = v_star_;
-  v_guess.segment<3>(2) = Vector3d(0.8 * vl_(0) /* below lower limit */,
+  v_guess.segment<3>(2) = Vector3d(1.2 * vl_(0) /* below lower limit */,
                                    v_star_(1) /* within limits */,
                                    1.1 * vu_(2) /* above upper limit */);
   SapSolverResults<double> result;
@@ -925,7 +978,7 @@ TEST_F(SapNewtonIterationTest, GuessOutsideLimits) {
 
   // Even though the initial guess is outside the constraint limits, once a SAP
   // iteration reaches a solution within the constraint's bounds, it will
-  // converge in a single iteration within machine epsilon.
+  // converge within machine epsilon in the next iteration.
   EXPECT_TRUE(CompareMatrices(result.v, v_star_, 3.0 * kEps,
                               MatrixCompareType::relative));
   EXPECT_TRUE(CompareMatrices(result.j,
@@ -937,6 +990,9 @@ TEST_F(SapNewtonIterationTest, GuessOutsideLimits) {
 
   // Verify Hessian obtained with sparse supernodal algebra.
   VerifySupernodalHessian(sap, v_guess);
+
+  // Verify solution computed with dense and supernodal algebra match.
+  CompareDenseAgainstSupernodal(v_guess);
 }
 
 }  // namespace internal

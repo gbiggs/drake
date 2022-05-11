@@ -7,8 +7,10 @@
 #include <vector>
 
 #include "drake/common/default_scalars.h"
+#include "drake/common/extract_double.h"
 #include "drake/math/linear_solve.h"
 #include "drake/multibody/contact_solvers/supernodal_solver.h"
+#include "drake/multibody/contact_solvers/rtsafe.h"
 
 namespace drake {
 namespace multibody {
@@ -162,10 +164,18 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
     // solve for the search direction dv.
     CalcSearchDirectionData(*context, supernodal_solver.get(),
                             &search_direction_data);
-    const VectorX<double>& dv = search_direction_data.dv;
+    const VectorX<double>& dv = search_direction_data.dv;    
 
-    const auto [alpha, ls_iters] = PerformBackTrackingLineSearch(
-        *context, search_direction_data, scratch.get());
+    double alpha = 1.0;
+    int ls_iters = 0;
+    if (parameters_.exact_line_search) {
+      std::tie(alpha, ls_iters) = PerformExactLineSearch(
+          *context, search_direction_data, scratch.get());
+    } else {
+      std::tie(alpha, ls_iters) = PerformBackTrackingLineSearch(
+          *context, search_direction_data, scratch.get());
+    }
+
     stats_.num_line_search_iters += ls_iters;
 
     // Update state.
@@ -214,7 +224,10 @@ template <typename T>
 T SapSolver<T>::CalcCostAlongLine(
     const systems::Context<T>& context,
     const SearchDirectionData& search_direction_data, const T& alpha,
-    systems::Context<T>* scratch) const {
+    systems::Context<T>* scratch, T* dell_dalpha, T* d2ell_dalpha2) const {
+  // If dell_dalpha is requested, then d2ell_dalpha2 must also be requested.
+  if (dell_dalpha != nullptr) DRAKE_DEMAND(d2ell_dalpha2 != nullptr);
+
   // Data.
   const VectorX<T>& R = model_->constraints_bundle().R();
   const VectorX<T>& v_star = model_->v_star();
@@ -222,6 +235,7 @@ T SapSolver<T>::CalcCostAlongLine(
   // Search direction quantities at state v.
   const VectorX<T>& dv = search_direction_data.dv;
   const VectorX<T>& dp = search_direction_data.dp;
+  const VectorX<T>& dvc = search_direction_data.dvc;
   const T& d2ellA_dalpha2 = search_direction_data.d2ellA_dalpha2;
 
   // State at v(alpha).
@@ -248,6 +262,52 @@ T SapSolver<T>::CalcCostAlongLine(
   ellA += alpha * dp.dot(v - v_star);
   ellA += 0.5 * alpha * alpha * d2ellA_dalpha2;
   const T ell = ellA + ellR;
+
+  // Compute both dell_dalpha & d2ell_dalpha2
+  if (dell_dalpha != nullptr) {
+    const VectorX<T>& v_alpha = model_->GetVelocities(context_alpha);
+
+    // First derivative.
+    const T dellA_dalpha = dp.dot(v_alpha - v_star);  // Momentum term.
+    const T dellR_dalpha = -dvc.dot(gamma);     // Regularizer term.
+    *dell_dalpha = dellA_dalpha + dellR_dalpha;
+
+    // Second derivative.
+    T d2ellR_dalpha2 = 0;  // = Δvcᵀ⋅G⋅Δvc
+    const std::vector<MatrixX<T>>& G =
+        model_->EvalConstraintsHessian(context_alpha);
+    const int nc = model_->num_constraints();
+    int constraint_start = 0;
+    for (int i = 0; i < nc; ++i) {
+      const MatrixX<T>& G_i = G[i];
+      // Number of equations for the i-th constraint.
+      const int ni = G_i.rows();
+      const auto dvc_i = dvc.segment(constraint_start, ni);
+
+      const T d2ellR_dalpha2_ic = dvc_i.transpose() * G_i * dvc_i;
+      // Theoretically we should have d2ellR_dalpha2_ic > 0. We check this
+      // conditions modulo a slop to account for round-off errors.
+      const double ell0 = ExtractDoubleOrThrow(model_->EvalCost(context));
+      const double slop =
+          50.0 * std::abs(ell0) * std::numeric_limits<double>::epsilon();
+      DRAKE_DEMAND(d2ellR_dalpha2_ic > -slop);
+
+      // clip any machine epsilon number smaller than zero to avoid accumulation
+      // of small negative numbers. This is ok since we checked above that
+      // d2ellR_dalpha2_ic is positive within a slop tolerance.
+      using std::max;
+      d2ellR_dalpha2 += max(0.0, d2ellR_dalpha2_ic);
+
+      constraint_start += ni;
+    }
+
+    *d2ell_dalpha2 = d2ellA_dalpha2 + d2ellR_dalpha2;
+
+    // Sanity check these terms are all positive.
+    DRAKE_DEMAND(d2ellR_dalpha2 >= 0.0);
+    DRAKE_DEMAND(d2ellA_dalpha2 > 0.0);
+    DRAKE_DEMAND(*d2ell_dalpha2 > 0);
+  }
 
   return ell;
 }
@@ -345,6 +405,102 @@ std::pair<T, int> SapSolver<T>::PerformBackTrackingLineSearch(
 
   // Silence "no-return value" warning from the compiler.
   DRAKE_UNREACHABLE();
+}
+
+template <typename T>
+std::pair<T, int> SapSolver<T>::PerformExactLineSearch(
+    const systems::Context<T>& context,
+    const SearchDirectionData& search_direction_data,
+    systems::Context<T>* scratch) const {
+  using std::abs;
+
+  // ===========================================================================
+  // Copy/paste from PerformBackTrackingLineSearch(). Consider refactoring.
+  // ===========================================================================
+
+  // Line search parameters.
+  //const double rho = parameters_.ls_rho;
+  //const double c = parameters_.ls_c;
+  //const int max_iterations = parameters_.ls_max_iterations;
+
+  // Quantities at alpha = 0.
+  const T& ell0 = model_->EvalCost(context);
+  const VectorX<T>& ell_grad_v0 = model_->EvalCostGradient(context);
+
+  // dℓ/dα(α = 0) = ∇ᵥℓ(α = 0)⋅Δv.
+  const VectorX<T>& dv = search_direction_data.dv;
+  const T dell_dalpha0 = ell_grad_v0.dot(dv);
+
+  T alpha = parameters_.ls_alpha_max;
+  T ell = CalcCostAlongLine(context, search_direction_data, alpha, scratch);
+
+  const double kTolerance = 50 * std::numeric_limits<double>::epsilon();
+  // N.B. We expect ell_scale != 0 since otherwise SAP's optimality condition
+  // would've been reached and the solver would not reach this point.
+  // N.B. ell = 0 implies v = v* and gamma = 0, for which the momentum residual
+  // is zero.
+  // Given that the Hessian in SAP is SPD we know that dell_dalpha0 < 0
+  // (strictly). dell_dalpha0 = 0 would mean that we reached the optimum but
+  // most certainly due to round-off errors or very tight user specified
+  // optimality tolerances, the optimality condition was not met and SAP
+  // performed an additional iteration to find a search direction that, most
+  // likely, is close to zero. We therefore detect this case with dell_dalpha0 ≈
+  // 0 and accept the search direction with alpha = 1.
+  const T ell_scale = 0.5 * (ell + ell0);
+  if (abs(dell_dalpha0 / ell_scale) < kTolerance) return std::make_pair(1.0, 0);
+
+  // dℓ/dα(α = 0) is guaranteed to be strictly negative given the the Hessian of
+  // the cost is positive definite. Only round-off errors in the factorization
+  // of the Hessian for ill-conditioned systems (small regularization) can
+  // destroy this property. If so, we abort given that'd mean the model must be
+  // revisited.
+  if (dell_dalpha0 >= 0) {
+    throw std::runtime_error(
+        "The cost does not decrease along the search direction. This is "
+        "usually caused by an excessive accumulation round-off errors for "
+        "ill-conditioned systems. Consider revisiting your model.");
+  }
+
+  // ===========================================================================
+  // End of copy/pasta.
+  // ===========================================================================
+
+  // N.B. We place the data needed to evaluate cost and gradients into a single
+  // struct so that cost_and_gradient only needs to capture a single pointer.
+  // This avoid heap allocation when calling RtSafe.
+  struct EvalData {
+    const SapSolver<T>* solver;
+    const Context<T>& context0;  // Context at alpha = 0.
+    const SearchDirectionData& search_direction_data;
+    Context<T>& scratch;   // Context at alpha != 0.
+    const T ell_scale;
+  };
+  EvalData data{this, context, search_direction_data, *scratch, ell_scale};
+
+  auto cost_and_gradient = [&data](const T& x, std::optional<T*> dfdx) {
+    // We normalize as:
+    // ell_tilde = (ell-ell_min)/ell_delta
+
+    // x == alpha
+    // f == dell_dalpha
+    // dfdx == d2ell_dalpha2
+    T dell_dalpha;
+    T d2ell_dalpha2;
+    data.solver->CalcCostAlongLine(data.context0, data.search_direction_data, x,
+                                   &data.scratch, &dell_dalpha, &d2ell_dalpha2);
+
+    if (dfdx) *dfdx.value() = d2ell_dalpha2 / data.ell_scale;
+    return dell_dalpha / data.ell_scale;
+  };
+
+  int num_iters = 0;
+  // The most likely solution close to the optimal solution.
+  const T alpha_guess = 1.0;
+  const bool check_interval = false;
+  alpha = RtSafe<T>(cost_and_gradient, 0, parameters_.ls_alpha_max, kTolerance,
+                    alpha_guess, check_interval, &num_iters);
+
+  return std::make_pair(alpha, num_iters);
 }
 
 template <typename T>
