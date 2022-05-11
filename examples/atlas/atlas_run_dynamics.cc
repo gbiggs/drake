@@ -15,6 +15,10 @@
 #include "drake/multibody/plant/compliant_contact_manager.h"
 #include "drake/systems/analysis/simulator_print_stats.h"
 
+#include <iostream>
+#define PRINT_VAR(a) std::cout << #a ": " << a << std::endl;
+#define PRINT_VARn(a) std::cout << #a ":\n" << a << std::endl;
+
 DEFINE_double(simulation_time, 2.0, "Simulation duration in seconds");
 DEFINE_double(penetration_allowance, 1.0E-3, "Allowable penetration (meters).");
 DEFINE_double(stiction_tolerance, 1.0E-3,
@@ -37,6 +41,7 @@ using Eigen::Translation3d;
 using Eigen::Vector3d;
 using Eigen::VectorXd;
 using drake::multibody::internal::CompliantContactManager;
+using drake::multibody::internal::ManagerStats;
 using clock = std::chrono::steady_clock;
 
 int do_main() {
@@ -142,9 +147,12 @@ int do_main() {
   clock::time_point sim_end_time = clock::now();
   const double sim_time =
       std::chrono::duration<double>(sim_end_time - sim_start_time).count();
-  std::cout << "AdvanceTo() time [sec]: " << sim_time << std::endl;
-
+  std::cout << "AdvanceTo() time [sec]: " << sim_time << std::endl;  
   systems::PrintSimulatorStatistics(*simulator);
+
+  const ManagerStats& stats = manager->stats();
+  PRINT_VAR(stats.num_iters);
+  PRINT_VAR(stats.num_ls_iters);
 
   return 0;
 }
