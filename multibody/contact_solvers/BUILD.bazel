@@ -137,6 +137,17 @@ drake_cc_library(
 )
 
 drake_cc_library(
+    name = "rtsafe",
+    srcs = [],
+    hdrs = ["rtsafe.h"],
+    copts = ["-Wno-error=unused-parameter", "-Wno-error=unused-variable", "-w"],
+    deps = [
+        "//common:default_scalars",
+        "//common:essential",
+    ],
+)
+
+drake_cc_library(
     name = "sparse_linear_operator",
     srcs = ["sparse_linear_operator.cc"],
     hdrs = ["sparse_linear_operator.h"],
@@ -211,6 +222,15 @@ drake_cc_googletest(
         ":pgs_solver",
         ":sparse_linear_operator",
         "//common/test_utilities:eigen_matrix_compare",
+    ],
+)
+
+drake_cc_googletest(
+    name = "rtsafe_test",
+    #copts = ["--spdlog_level debug"],
+    args  = ["--spdlog_level debug"],
+    deps = [
+        ":rtsafe",
     ],
 )
 
