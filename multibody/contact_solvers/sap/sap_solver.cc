@@ -8,6 +8,7 @@
 
 #include "drake/common/default_scalars.h"
 #include "drake/common/extract_double.h"
+#include "drake/common/test_utilities/limit_malloc.h"
 #include "drake/math/linear_solve.h"
 #include "drake/multibody/contact_solvers/supernodal_solver.h"
 #include "drake/multibody/contact_solvers/rtsafe.h"
@@ -18,6 +19,7 @@ namespace contact_solvers {
 namespace internal {
 
 using drake::systems::Context;
+using drake::test::LimitMalloc;
 
 template <typename T>
 void SapSolver<T>::set_parameters(const SapSolverParameters& parameters) {
@@ -228,6 +230,11 @@ T SapSolver<T>::CalcCostAlongLine(
   // If dell_dalpha is requested, then d2ell_dalpha2 must also be requested.
   if (dell_dalpha != nullptr) DRAKE_DEMAND(d2ell_dalpha2 != nullptr);
 
+  std::vector<T> storage(16);
+
+  // We expect no allocations beyond this point.
+  //LimitMalloc guard({.max_num_allocations = 0});
+
   // Data.
   const VectorX<T>& R = model_->constraints_bundle().R();
   const VectorX<T>& v_star = model_->v_star();
@@ -284,7 +291,12 @@ T SapSolver<T>::CalcCostAlongLine(
       const int ni = G_i.rows();
       const auto dvc_i = dvc.segment(constraint_start, ni);
 
-      const T d2ellR_dalpha2_ic = dvc_i.transpose() * G_i * dvc_i;
+      // std::vector does not allocate if ni <= capacity.
+      storage.resize(ni);
+      Eigen::Map<VectorX<T>> tmp(storage.data(), ni);
+
+      tmp.noalias() = G_i * dvc_i;
+      const T d2ellR_dalpha2_ic = dvc_i.dot(tmp);
       // Theoretically we should have d2ellR_dalpha2_ic > 0. We check this
       // conditions modulo a slop to account for round-off errors.
       const double ell0 = ExtractDoubleOrThrow(model_->EvalCost(context));
@@ -414,6 +426,10 @@ std::pair<T, int> SapSolver<T>::PerformExactLineSearch(
     systems::Context<T>* scratch) const {
   using std::abs;
 
+  // Ensure everythin is allocated beyond this point.
+  model_->EvalConstraintsHessian(*scratch);
+  model_->EvalImpulses(*scratch);
+
   // ===========================================================================
   // Copy/paste from PerformBackTrackingLineSearch(). Consider refactoring.
   // ===========================================================================
@@ -492,6 +508,8 @@ std::pair<T, int> SapSolver<T>::PerformExactLineSearch(
     if (dfdx) *dfdx.value() = d2ell_dalpha2 / data.ell_scale;
     return dell_dalpha / data.ell_scale;
   };
+
+//  LimitMalloc guard({.max_num_allocations = 0});
 
   int num_iters = 0;
   // The most likely solution close to the optimal solution.
