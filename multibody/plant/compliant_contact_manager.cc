@@ -713,12 +713,8 @@ void CompliantContactManager<T>::DoCalcContactSolverResults(
   // Solve contact problem.
   StopWatch stop_watch;
   SapSolver<T> sap;
+  sap.set_parameters(sap_parameters_);
   SapSolverResults<T> sap_results;
-  SapSolverParameters  params;
-  params.ls_max_iterations = 100;
-  params.ls_alpha_max = 1.0 / params.ls_rho;
-  params.rel_tolerance = 1e-6;
-  sap.set_parameters(params);
   const drake::multibody::contact_solvers::internal::SapSolverStatus status =
       sap.SolveWithGuess(sap_problem, v0, &sap_results);
   if (status !=

@@ -174,6 +174,12 @@ class CompliantContactManager final
 
   ~CompliantContactManager() final;
 
+  // Sets the parameters to be used by the SAP solver.
+  void set_sap_solver_parameters(
+      const contact_solvers::internal::SapSolverParameters& parameters) {
+    sap_parameters_ = parameters;
+  }
+
   void AddCouplerConstraint(const Joint<T>& joint0, const Joint<T>& joint1,
                             const T& gear_ratio, const T& stiffness,
                             const T& dissipation_time_scale);
@@ -371,6 +377,7 @@ class CompliantContactManager final
       const;
 
   CacheIndexes cache_indexes_;
+  contact_solvers::internal::SapSolverParameters sap_parameters_;
   // Vector of joint damping coefficients, of size plant().num_velocities().
   // This information is extracted during the call to ExtractModelInfo().
   VectorX<T> joint_damping_;
