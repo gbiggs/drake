@@ -1,6 +1,8 @@
 #pragma once
 
 #include <functional>
+#include <tuple>
+#include <utility>
 
 #include "drake/common/drake_assert.h"
 #include "drake/common/drake_throw.h"
@@ -11,96 +13,105 @@ namespace multibody {
 namespace contact_solvers {
 namespace internal {
 
-// Exactly copied from NR.
-template <typename T>
-T RtSafe(const std::function<T(const T&, std::optional<T*>)>& function, T xl,
-         T xh, double xacc, const T& x_guess, bool check_interval,
-         int* num_iters = nullptr) {
+struct NewtonWithBisectionFallbackParams {
+  double abs_tolerance{std::numeric_limits<double>::epsilon()};
+  int max_iterations{100};
+  bool verify_interval{true};
+};
+
+/*
+
+*/
+std::pair<double, int> NewtonWithBisectionFallback(
+    const std::function<std::pair<double, double>(double)>& function,
+    double x_lower, double x_upper, double x_guess,
+    const NewtonWithBisectionFallbackParams& params) {
   using std::abs;
   using std::max;
   using std::min;
   using std::swap;
-  constexpr int kMaxIterations = 100;
-  DRAKE_THROW_UNLESS(xacc > 0);
+  DRAKE_THROW_UNLESS(params.abs_tolerance > 0);
+  DRAKE_THROW_UNLESS(params.max_iterations > 0);
 
-  if (check_interval) {
-    DRAKE_THROW_UNLESS(xh > xl);
-    DRAKE_THROW_UNLESS(xl <= x_guess && x_guess <= xh);
+  // These checks verify there is an appropriate bracket around the root,
+  // though at the expense of additional evaluations.
+  if (params.verify_interval) {
+    DRAKE_THROW_UNLESS(x_upper > x_lower);
+    DRAKE_THROW_UNLESS(x_lower <= x_guess && x_guess <= x_upper);
 
-    const T fl = function(xl, std::nullopt);
-    const T fh = function(xh, std::nullopt);
+    const auto [f_lower, df_lower] = function(x_lower);
+    if (f_lower == 0) return std::make_pair(x_lower, 1);
 
-    DRAKE_THROW_UNLESS(fl * fh <= 0);
+    const auto [f_upper, df_upper] = function(x_upper);
+    if (f_upper == 0) return std::make_pair(x_upper, 2);
 
-    if (fl == 0) return xl;
-    if (fh == 0) return xh;
+    DRAKE_THROW_UNLESS(f_lower * f_upper <= 0);
 
-    // Re-orient the search so that f(xl) < 0.
-    if (fl > 0) swap(xl, xh);
+    // Re-orient the search so that f(x_lower) < 0.
+    if (f_lower > 0) swap(x_lower, x_upper);
   }
 
-  T rts = x_guess;
-  T dxold = (xh - xl);
-  T dx = dxold;
-  T df;
-  T f = function(rts, &df);
-  for (int k = 1; k <= kMaxIterations; ++k) {
-    // If the function is already too small, return.
-    //if (abs(f) < 10 * std::numeric_limits<double>::epsilon()) {
-    //  if (num_iters) *num_iters = k;
-    //  return rts;
-    //}
+  double root = x_guess;  // Initialize to user supplied guess.
+  double dx_previous = (x_upper - x_lower);
+  double minus_dx = dx_previous;
+  auto [f, df] = function(root);
+  for (int num_evaluations = 1; num_evaluations <= params.max_iterations;
+       ++num_evaluations) {
 
-    if (((rts - xh) * df - f) * ((rts - xl) * df - f) > 0.0 ||
-        abs(2.0 * f) > abs(dxold * df)) {
-      dxold = dx;
-      dx = 0.5 * (xh - xl);
-      rts = xl + dx;
+    if (((root - x_upper) * df - f) * ((root - x_lower) * df - f) > 0.0 ||
+        abs(2.0 * f) > abs(dx_previous * df)) {
+      // Bisection: Newton's method would either take us out of bounds or is not
+      // reducing the size of the bracket fast enough.          
+      dx_previous = minus_dx;
+      minus_dx = 0.5 * (x_upper - x_lower);
+      root = x_lower + minus_dx;
       DRAKE_LOGGER_DEBUG(
-          "Bisect. k = {:d}. x = {:12.6g}. [xl, xh] = [{:12.8g}, {:12.8g}].", k,
-          rts, xl, xh);
-      if (xl == rts) {
-        if (num_iters) *num_iters = k;
-        return rts;
+          "Bisect. k = {:d}. x = {:12.6g}. [x_lower, x_upper] = [{:12.8g}, "
+          "{:12.8g}].",
+          num_evaluations, root, x_lower, x_upper);
+      if (x_lower == root) {
+        return std::make_pair(root, num_evaluations);
       }
     } else {
-      dxold = dx;
-      dx = f / df;
-      T temp = rts;
-      rts -= dx;
+      // Newton method.
+      dx_previous = minus_dx;
+      minus_dx = f / df;
+      double previous_root = root;
+      root -= minus_dx;
       DRAKE_LOGGER_DEBUG(
-          "Newton. k = {:d}. x = {:12.6g}. [xl, xh] = [{:12.8g}, {:12.8g}].", k,
-          rts, xl, xh);
-      if (temp == rts) {
-        if (num_iters) *num_iters = k;
-        return rts;
+          "Newton. k = {:d}. x = {:12.6g}. [x_lower, x_upper] = [{:12.8g}, "
+          "{:12.8g}].",
+          num_evaluations, root, x_lower, x_upper);
+      if (previous_root == root) {
+        // If previous_root equals root "after" the update, it means that minus_dx is
+        // small compared to root's value, in floating point precision.
+        return std::make_pair(root, num_evaluations);
       }
     }
-    if (abs(dx) < xacc) {
-      if (num_iters) *num_iters = k;
-      return rts;
+
+    // Return if minus_dx is within the specified absolute tolerance.
+    if (abs(minus_dx) < params.abs_tolerance) {      
+      return std::make_pair(root, num_evaluations);
     }
-    f = function(rts, &df);
-    if (f < 0.0)
-      xl = rts;
-    else
-      xh = rts;
+
+    // The one single evaluation of the function and its derivatives per
+    // iteration.
+    std::tie(f, df) = function(root);
+
+    // Update the bracket around root.
+    if (f < 0.0) {
+      x_lower = root;
+    } else {
+      x_upper = root;
+    }
   }
 
-  // If here, then RtSafe did not converge.
+  // If here, then NewtonWithBisectionFallback did not converge.
   throw std::runtime_error(
-      fmt::format("RtSafe did not converge.\n"
-                  "|x - x_prev| = {}. |xh-xl| = {}",
-                  abs(dx), abs(xh - xl)));
+      fmt::format("NewtonWithBisectionFallback did not converge.\n"
+                  "|x - x_prev| = {}. |x_upper-x_lower| = {}",
+                  abs(minus_dx), abs(x_upper - x_lower)));
 };
-
-template <typename T>
-T RtSafe(const std::function<T(const T&, std::optional<T*>)>& function, T xl,
-         T xh, double xacc, int* num_iters = nullptr) {
-  const T x_guess = 0.5 * (xl + xh);
-  const bool check_bracket = true;
-  return RtSafe<T>(function, xl, xh, xacc, x_guess, check_bracket, num_iters);
-}
 
 }  // namespace internal
 }  // namespace contact_solvers
