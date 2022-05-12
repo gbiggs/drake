@@ -32,6 +32,12 @@
 // valgrind --tool=callgrind --separate-callers=10 --instr-atstart=no
 // bazel-bin/examples/multibody/mp_convex_solver/clutter
 #include <valgrind/callgrind.h>
+
+#include <iostream>
+#define PRINT_VAR(a) std::cout << #a ": " << a << std::endl;
+#define PRINT_VARn(a) std::cout << #a ":\n" << a << std::endl;
+
+
 namespace drake {
 namespace multibody {
 namespace examples {
@@ -103,7 +109,6 @@ DEFINE_int32(verbosity_level, 0,
              "UnconstrainedPrimalSolverParameters.");
 DEFINE_string(line_search, "exact",
               "Primal solver line-search. 'exact', 'inexact'");
-DEFINE_double(ls_alpha_max, 1.5, "Maximum line search step.");
 DEFINE_double(rt_factor, 1.0e-3, "Rt_factor");
 DEFINE_double(alpha, 1.0, "Rigid time scale factor.");
 DEFINE_double(sigma, 1.0e-3, "Friction dimensionless parameterization.");
@@ -113,6 +118,10 @@ DEFINE_bool(log_stats, true, "Log all iterations stats.");
 DEFINE_bool(log_cond_number, false,
             "Estimate and log condition number (expensive).");
 
+DEFINE_bool(ls_exact, true, "ls_exact");
+DEFINE_double(ls_alpha_max, 1.25, "ls_alpha_max");
+DEFINE_double(ls_rho, 0.8, "ls_rho");
+
 using drake::math::RigidTransform;
 using drake::math::RigidTransformd;
 using drake::math::RollPitchYawd;
@@ -120,7 +129,9 @@ using drake::math::RotationMatrixd;
 using drake::multibody::ContactResults;
 using drake::multibody::MultibodyPlant;
 using drake::multibody::internal::CompliantContactManager;
+using drake::multibody::internal::ManagerStats;
 using drake::multibody::contact_solvers::internal::SapSolver;
+using drake::multibody::contact_solvers::internal::SapSolverParameters;
 using drake::geometry::CollisionFilterDeclaration;
 using Eigen::Translation3d;
 using Eigen::Vector3d;
@@ -476,12 +487,18 @@ int do_main() {
     plant.set_stiction_tolerance(FLAGS_stiction_tolerance);
   }
   
+  CompliantContactManager<double>* manager{nullptr};
   if (!FLAGS_tamsi) {
     auto owned_contact_manager =
       std::make_unique<CompliantContactManager<double>>();
-    CompliantContactManager<double>* manager = owned_contact_manager.get();
+    manager = owned_contact_manager.get();
     (void)manager;
     plant.SetDiscreteUpdateManager(std::move(owned_contact_manager));  
+    SapSolverParameters parameters;
+    parameters.exact_line_search = FLAGS_ls_exact;
+    parameters.ls_alpha_max = FLAGS_ls_alpha_max;
+    parameters.ls_rho = FLAGS_ls_rho;
+    manager->set_sap_solver_parameters(parameters);
   }
 
   fmt::print("Num positions: {:d}\n", plant.num_positions());
@@ -535,6 +552,33 @@ int do_main() {
 
   PrintSimulatorStatistics(*simulator);
 
+  const ManagerStats& stats = manager->stats();
+  PRINT_VAR(stats.free_motion_accelerations_time);
+  PRINT_VAR(stats.free_motion_velocities_time);
+  PRINT_VAR(stats.discrete_pairs_time);
+  PRINT_VAR(stats.contact_kinematics_time);
+  PRINT_VAR(stats.make_problem_time);
+  PRINT_VAR(stats.solve_problem_time);
+  PRINT_VAR(stats.pack_results_time);
+  PRINT_VAR(stats.discrete_update_time);
+  PRINT_VAR(stats.contact_results_time);
+
+  std::cout << std::endl;
+  PRINT_VAR(stats.sap_stats.size());
+  PRINT_VAR(stats.num_iters);
+  PRINT_VAR(stats.num_ls_iters);
+
+  // Average number of constraints.
+#if 0
+  int num_constraints = 0;
+  int num_constraint_equations = 0;
+  for (const auto& s : stats.sap_stats) {
+    num_constraints += s.num_constraints;
+    num_constraint_equations += s.num_constraint_equations;
+  }
+  PRINT_VAR(num_constraints);
+  PRINT_VAR(num_constraint_equations);
+#endif
   return 0;
 }
 
