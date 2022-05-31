@@ -52,19 +52,19 @@ std::pair<double, int> NewtonWithBisectionFallback(
   }
 
   double root = x_guess;  // Initialize to user supplied guess.
-  double dx_previous = (x_upper - x_lower);
-  double minus_dx = dx_previous;
+  double previous_minus_dx = (x_upper - x_lower);
+  double minus_dx = previous_minus_dx;
   auto [f, df] = function(root);
   for (int num_evaluations = 1; num_evaluations <= params.max_iterations;
        ++num_evaluations) {
 
     if (((root - x_upper) * df - f) * ((root - x_lower) * df - f) > 0.0 ||
-        abs(2.0 * f) > abs(dx_previous * df)) {
+        abs(2.0 * f) > abs(previous_minus_dx * df)) {
       // Bisection: Newton's method would either take us out of bounds or is not
       // reducing the size of the bracket fast enough.          
-      dx_previous = minus_dx;
-      minus_dx = 0.5 * (x_upper - x_lower);
-      root = x_lower + minus_dx;
+      previous_minus_dx = minus_dx;
+      minus_dx = 0.5 * (x_lower - x_upper);
+      root = x_lower - minus_dx;
       DRAKE_LOGGER_DEBUG(
           "Bisect. k = {:d}. x = {:12.6g}. [x_lower, x_upper] = [{:12.8g}, "
           "{:12.8g}].",
@@ -74,7 +74,7 @@ std::pair<double, int> NewtonWithBisectionFallback(
       }
     } else {
       // Newton method.
-      dx_previous = minus_dx;
+      previous_minus_dx = minus_dx;
       minus_dx = f / df;
       double previous_root = root;
       root -= minus_dx;
