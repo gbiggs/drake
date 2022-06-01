@@ -36,6 +36,7 @@ std::pair<double, int> NewtonWithBisectionFallback(
   DRAKE_THROW_UNLESS(params.abs_tolerance > 0);
   DRAKE_THROW_UNLESS(params.max_iterations > 0);
 
+  // TODO: needed?
   if (x_lower > x_upper) swap(x_lower, x_upper);
 
   // These checks verify there is an appropriate bracket around the root,
@@ -50,80 +51,57 @@ std::pair<double, int> NewtonWithBisectionFallback(
   DRAKE_THROW_UNLESS(f_lower * f_upper <= 0);
 
   double root = x_guess;  // Initialize to user supplied guess.
-  double previous_minus_dx = (x_upper - x_lower);
-  double minus_dx = previous_minus_dx;
+  double minus_dx = (x_lower - x_upper);
   auto [f, df] = function(root);
+
+  auto do_bisection = [&x_upper, &x_lower]() {
+    const double dx_negative = 0.5 * (x_lower - x_upper);
+    // Update root.
+    // N.B. This way of updating the root will lead to root == x_lower if
+    // the value of minus_dx is insignificant compared to x_lower when using
+    // floating point precision. This fact is used in the termination check
+    // below to exit whenever a user specifies abs_tolerance = 0.
+    const double x = x_lower - dx_negative;
+
+    return std::make_pair(x, dx_negative);
+  };
+
+  auto do_newton = [&f, &df, &root]() {
+    const double dx_negative = f / df;    
+    double x = root;
+    x -= dx_negative;
+    return std::make_pair(x, dx_negative);
+  };
+
   for (int num_evaluations = 1; num_evaluations <= params.max_iterations;
        ++num_evaluations) {
-    // A value x falls outside the bracket [xₗ,xᵤ] whenever:
-    //   (x-xₗ)⋅(x-xᵤ) > 0
-    // Multiplying by f'² (which is positive):
-    //   [(x-xₗ)f']⋅[f'(x-xᵤ)] > 0
-    // Now, if x corresponds to the Newton update x = root - f / f', the above
-    // inequality becomes:
-    //   [(root-xₗ)f'-f]⋅[(root-xᵤ)f'-f)] > 0
-    // which avoids the the division by f'.
-    // const bool newton_falls_outside_bracket =
-    //  ((root - x_upper) * df - f) * ((root - x_lower) * df - f) > 0.0;
-    const double x = root - f / df;
-    const bool newton_falls_outside_bracket = x < x_lower || x > x_upper;
-    if (newton_falls_outside_bracket ||
-        abs(2.0 * f) > abs(previous_minus_dx * df)) {
-      // Bisection: Newton's method would either take us out of bounds or is not
-      // reducing the size of the bracket fast enough.
-      // Bisection updates root to:
-      //   root = (x_upper + x_lower)/2
-      // Given this update rule, whether the previous root was located at
-      // x_lower or x_upper, the magnitude of the update is:
-      //  dx = x - x_previous = (x_upper - x_lower)/2
-      // With this definition of dx, the root can be written as:
-      //  root = x_lower + dx
-      previous_minus_dx = minus_dx;  // Save (minus) dx before updating it.
-      minus_dx = 0.5 * (x_lower - x_upper);
-      // Update root.
-      // N.B. This way of updating the root will lead to root == x_lower if the
-      // value of minus_dx is insignificant compared to x_lower when using
-      // floating point precision. This fact is used in the termination check
-      // below to exit whenever a user specifies abs_tolerance = 0.
-      root = x_lower - minus_dx;
-      // N.B. There is an extra space before "Bisect" so the console output
-      // matches the indentation for the "Newton" case below.
-      DRAKE_LOGGER_DEBUG(
-          " Bisect. k = {:d}. x = {:10.4g}. [x_lower, x_upper] = [{:10.4g}, "
-          "{:10.4g}]. dx = {:10.4g}. f = {:10.4g}. dfdx = {:10.4g}.",
-          num_evaluations, root, x_lower, x_upper, -minus_dx, f, df);
-      if (x_lower == root) {
-        return std::make_pair(root, num_evaluations);
-      }
+    if (f == 0) return std::make_pair(root, num_evaluations);
+    
+    const bool newton_is_slow = 2.0 * abs(f) > abs(minus_dx * df);
+
+    if (newton_is_slow) {
+      std::tie(root, minus_dx) = do_bisection();
+      DRAKE_LOGGER_DEBUG("Bisect. k = {:d}.", num_evaluations);
     } else {
-      // Newton method.
-      previous_minus_dx = minus_dx;
-      minus_dx = f / df;
-      double previous_root = root;
-      // N.B. This update will leave root unchanged if minus_dx is negligible
-      // when compared to root using floating point precision. This fact is used
-      // in the termination check below to exit whenever a user specifies
-      // abs_tolerance = 0.
-      root -= minus_dx;
-      DRAKE_LOGGER_DEBUG(
-          "Newton. k = {:d}. x = {:10.4g}. [x_lower, x_upper] = [{:10.4g}, "
-          "{:10.4g}]. dx = {:10.4g}. f = {:10.4g}. dfdx = {:10.4g}.",
-          num_evaluations, root, x_lower, x_upper, -minus_dx, f, df);
-      if (previous_root == root) {
-        // If previous_root equals root "after" the update, it means that
-        // minus_dx is small compared to root's value, in floating point
-        // precision.
-        return std::make_pair(root, num_evaluations);
+      std::tie(root, minus_dx) = do_newton();
+      const bool outside_bracket = root < x_lower || root > x_upper;
+      if (outside_bracket) {
+        std::tie(root, minus_dx) = do_bisection();
+        DRAKE_LOGGER_DEBUG("Bisect. k = {:d}.", num_evaluations);
+      } else {
+        DRAKE_LOGGER_DEBUG("Newton. k = {:d}.", num_evaluations);
       }
     }
 
-    // Return if minus_dx is within the specified absolute tolerance.
-    if (abs(minus_dx) < params.abs_tolerance) {
-      return std::make_pair(root, num_evaluations);
-    }
+    DRAKE_LOGGER_DEBUG(
+        "x = {:10.4g}. [x_lower, x_upper] = [{:10.4g}, "
+        "{:10.4g}]. dx = {:10.4g}. f = {:10.4g}. dfdx = {:10.4g}.",
+        root, x_lower, x_upper, -minus_dx, f, df);
 
-    // The one single evaluation of the function and its derivatives per
-    // iteration.
+    if (abs(minus_dx) < params.abs_tolerance)
+      return std::make_pair(root, num_evaluations);
+
+    // The one evaluation per iteration.     
     std::tie(f, df) = function(root);
 
     // Update the bracket around root to guarantee that there exist a root
