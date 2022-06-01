@@ -170,15 +170,30 @@ struct RootFindingTest : public testing::TestWithParam<RootFindingTestData> {};
 
 TEST_P(RootFindingTest, VerifyExpectedResults) {
   const RootFindingTestData& data = GetParam();
+
   // We printout the human-readable description so that when running the tests
   // we see more than Test/0, Test/1, etc.
   std::cout << data << std::endl;
-  //int num_iters;
-  //const double x =
-    //  NewtonWithBisectionFallback<double>(data.function, data.a, data.b, data.tolerance, &num_iters);
 
-  const auto [x, num_iterations] =
-      NewtonWithBisectionFallback(data.function, data.a, data.b, data.guess, data.params);
+  // Find root in the interval [data.a, data.b]
+  const auto [x, num_iterations] = NewtonWithBisectionFallback(
+      data.function, data.a, data.b, data.guess, data.params);
+  EXPECT_NEAR(x, data.root, data.params.abs_tolerance);
+  if (data.num_iterations) {
+    EXPECT_EQ(num_iterations, *data.num_iterations);
+  }
+}
+
+TEST_P(RootFindingTest, VerifyExpectedResults_IntervalReversed) {
+  const RootFindingTestData& data = GetParam();
+
+  // We printout the human-readable description so that when running the tests
+  // we see more than Test/0, Test/1, etc.
+  std::cout << data << std::endl;
+ 
+  // Find root in the interval [data.b, data.a]
+  const auto [x, num_iterations] = NewtonWithBisectionFallback(
+      data.function, data.b, data.a, data.guess, data.params);
   EXPECT_NEAR(x, data.root, data.params.abs_tolerance);
   if (data.num_iterations) {
     EXPECT_EQ(num_iterations, *data.num_iterations);
