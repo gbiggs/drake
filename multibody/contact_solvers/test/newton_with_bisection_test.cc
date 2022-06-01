@@ -1,4 +1,4 @@
-#include "drake/multibody/contact_solvers/rtsafe.h"
+#include "drake/multibody/contact_solvers/newton_with_bisection.h"
 
 #include <optional>
 
@@ -31,7 +31,7 @@ struct RootFindingTestData {
               << "  [fa, fb] = [" << data.function(data.a).first << ", "
               << data.function(data.b).second << "]" << std::endl
               << "  Root: " << data.root << std::endl
-              << "  Tolerance: " << data.params.abs_tolerance << std::endl
+              << "  Tolerance: " << data.abs_tolerance << std::endl
               << "}" << std::flush;
   }
 
@@ -42,10 +42,11 @@ struct RootFindingTestData {
   // derivative dfdx at x.
   // dfdx can be nullopt or {} if the derivative is not needed.
   Function function;
-  double a, b;       // Interval used for root finding.
-  double guess;      // The initial guess. It must be in [a, b].
-  double root;       // The true root in [a, b].  
-  NewtonWithBisectionFallbackParams params;
+  double a, b;   // Interval used for root finding.
+  double guess;  // The initial guess. It must be in [a, b].
+  double root;   // The true root in [a, b].
+  double abs_tolerance{std::numeric_limits<double>::epsilon()};
+  int max_iterations{100};
   // Expected number of iterations, if known.
   std::optional<int> num_iterations;
 };
@@ -58,10 +59,15 @@ std::vector<RootFindingTestData> GenerateTestCases() {
                      double dfx = 1.5;
                      return std::make_pair(f, dfx);
                    },
-                   .a = -4.0, .b = 3.0, .guess = -0.5, .root = -2.0, {},
+                   .a = -4.0,
+                   .b = 3.0,
+                   .guess = -0.5,
+                   .root = -2.0,
+                   .abs_tolerance = std::numeric_limits<double>::epsilon(),
+                   .max_iterations = 100,
                    // Since the function is linear, it reaches the solution in
                    // the first iteration (one evaluation). An additional
-                   // evaluation is needed by rtsafe to assess convergence.
+                   // evaluation is needed to assess convergence.
                    .num_iterations = 2});
 
   // This function has two roots. We push them as two separate cases with two
@@ -91,8 +97,6 @@ std::vector<RootFindingTestData> GenerateTestCases() {
 
   // For y = x³ − 2x + 2 with initial guess x0 = 0, Newton-Raphson will enter
   // into an infinity cycle without convergence.
-  // Since rtsafe uses x0 = (a+b)/2, we choose [a, b] = [-3, 3] so that x0=0 to
-  // force the case where Newton-Raphson has problems.
   cases.push_back({"y = x³ − 2x + 2",
                    [](double x) {
                      const double x2 = x * x;
@@ -139,8 +143,7 @@ std::vector<RootFindingTestData> GenerateTestCases() {
 
   // Discontinuous derivative. A linear function plus a discontinuity will cause
   // the traditional Newton-Raphson to fall into an infinite cycle without
-  // converging to the solution. rtsafe switches to bisection when the bracket
-  // starts getting close to the solution.
+  // converging to the solution.
   cases.push_back({"y = x + H(x+0.3)",
                    [](double x) {
                      const double f = x + ((x > -0.3) ? 1.0 : 0.0);
@@ -163,7 +166,8 @@ std::vector<RootFindingTestData> GenerateTestCases() {
 }
 
 // Test parametrized on different root finding cases.
-// To see debug information printed out by NewtonWithBisectionFallback, run with:
+// To see debug information printed out by DoNewtonWithBisectionFallback, run
+// with:
 //   bazel run -c dbg multibody/contact_solvers:newton_safe_test --
 //   --spdlog_level debug
 struct RootFindingTest : public testing::TestWithParam<RootFindingTestData> {};
@@ -176,25 +180,10 @@ TEST_P(RootFindingTest, VerifyExpectedResults) {
   std::cout << data << std::endl;
 
   // Find root in the interval [data.a, data.b]
-  const auto [x, num_iterations] = NewtonWithBisectionFallback(
-      data.function, data.a, data.b, data.guess, data.params);
-  EXPECT_NEAR(x, data.root, data.params.abs_tolerance);
-  if (data.num_iterations) {
-    EXPECT_EQ(num_iterations, *data.num_iterations);
-  }
-}
-
-TEST_P(RootFindingTest, VerifyExpectedResults_IntervalReversed) {
-  const RootFindingTestData& data = GetParam();
-
-  // We printout the human-readable description so that when running the tests
-  // we see more than Test/0, Test/1, etc.
-  std::cout << data << std::endl;
- 
-  // Find root in the interval [data.b, data.a]
-  const auto [x, num_iterations] = NewtonWithBisectionFallback(
-      data.function, data.b, data.a, data.guess, data.params);
-  EXPECT_NEAR(x, data.root, data.params.abs_tolerance);
+  const auto [x, num_iterations] =
+      DoNewtonWithBisectionFallback(data.function, data.a, data.b, data.guess,
+                                    data.abs_tolerance, data.max_iterations);
+  EXPECT_NEAR(x, data.root, data.abs_tolerance);
   if (data.num_iterations) {
     EXPECT_EQ(num_iterations, *data.num_iterations);
   }

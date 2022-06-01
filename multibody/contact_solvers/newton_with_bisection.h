@@ -8,35 +8,40 @@
 #include "drake/common/drake_assert.h"
 #include "drake/common/drake_throw.h"
 #include "drake/common/text_logging.h"
-#define PRINT_VAR(a) std::cout << #a ": " << a << std::endl;
 
 namespace drake {
 namespace multibody {
 namespace contact_solvers {
 namespace internal {
 
-struct NewtonWithBisectionFallbackParams {
-  double abs_tolerance{std::numeric_limits<double>::epsilon()};
-  int max_iterations{100};
-  bool verify_interval{true};
-};
-
 /*
-  f(x_lower) < 0
-  f(x_upper) > 0
+  Uses a Newton-Raphson method to compute a root of `function` within the
+  bracket [x_lower, x_upper]. This method stops when the difference between the
+  previous iterate xᵏ and the next iteration xᵏ⁺¹ is below the absolute
+  tolerance `abs_tolerance`, i.e. when |xᵏ⁺¹ - xᵏ| < abs_tolerance.
+
+  This method expect that sign(function(x_lower)) != sign(function_x_upper). For
+  continuous functions, this ensures there exists a root in [x_lower, x_upper].
+
+  @pre x_lower <= x_upper
+  @pre x_guess is in [x_lower, x_upper]
+  @pre sign(function(x_lower)) != sign(function_x_upper)
+  @pre abs_tolerance > 0
+  @pre max_iterations > 0
 */
-std::pair<double, int> NewtonWithBisectionFallback(
+std::pair<double, int> DoNewtonWithBisectionFallback(
     const std::function<std::pair<double, double>(double)>& function,
     double x_lower, double x_upper, double x_guess,
-    const NewtonWithBisectionFallbackParams& params) {
+    double abs_tolerance, int max_iterations) {
   using std::abs;
-  using std::max;
-  using std::min;
   using std::swap;
-  DRAKE_THROW_UNLESS(params.abs_tolerance > 0);
-  DRAKE_THROW_UNLESS(params.max_iterations > 0);
+  // Pre-conditions on the bracket.
+  DRAKE_THROW_UNLESS(x_lower <= x_guess && x_guess <= x_upper);
 
-  // TODO: needed?
+  // Pre-conditions on the algorithm's parameters.
+  DRAKE_THROW_UNLESS(abs_tolerance > 0);
+  DRAKE_THROW_UNLESS(max_iterations > 0);
+
   if (x_lower > x_upper) swap(x_lower, x_upper);
 
   // These checks verify there is an appropriate bracket around the root,
@@ -47,8 +52,9 @@ std::pair<double, int> NewtonWithBisectionFallback(
   auto [f_upper, df_upper] = function(x_upper);
   if (f_upper == 0) return std::make_pair(x_upper, 2);
 
-  // Verify guess is inside the bracket.
-  DRAKE_THROW_UNLESS(f_lower * f_upper <= 0);
+  // Verify guess is inside the bracket. Notice that f_lower * f_upper != 0
+  // since the case f_lower == 0 || f_upper == 0 has been ruled out above.
+  DRAKE_THROW_UNLESS(f_lower * f_upper < 0);
 
   double root = x_guess;  // Initialize to user supplied guess.
   double minus_dx = (x_lower - x_upper);
@@ -73,7 +79,7 @@ std::pair<double, int> NewtonWithBisectionFallback(
     return std::make_pair(x, dx_negative);
   };
 
-  for (int num_evaluations = 1; num_evaluations <= params.max_iterations;
+  for (int num_evaluations = 1; num_evaluations <= max_iterations;
        ++num_evaluations) {
     if (f == 0) return std::make_pair(root, num_evaluations);
 
@@ -87,8 +93,6 @@ std::pair<double, int> NewtonWithBisectionFallback(
       DRAKE_LOGGER_DEBUG("Bisect. k = {:d}.", num_evaluations);
     } else {
       std::tie(root, minus_dx) = do_newton();
-      PRINT_VAR(root);
-      PRINT_VAR(minus_dx);
       const bool outside_bracket = root < x_lower || root > x_upper;
       if (outside_bracket) {
         std::tie(root, minus_dx) = do_bisection();
@@ -103,7 +107,7 @@ std::pair<double, int> NewtonWithBisectionFallback(
         "{:10.4g}]. dx = {:10.4g}. f = {:10.4g}. dfdx = {:10.4g}.",
         root, x_lower, x_upper, -minus_dx, f, df);
 
-    if (abs(minus_dx) < params.abs_tolerance)
+    if (abs(minus_dx) < abs_tolerance)
       return std::make_pair(root, num_evaluations);
 
     // The one evaluation per iteration.

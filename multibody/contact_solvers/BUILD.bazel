@@ -137,9 +137,9 @@ drake_cc_library(
 )
 
 drake_cc_library(
-    name = "rtsafe",
+    name = "newton_with_bisection",
     srcs = [],
-    hdrs = ["rtsafe.h"],
+    hdrs = ["newton_with_bisection.h"],
     copts = ["-Wno-error=unused-parameter", "-Wno-error=unused-variable", "-w"],
     deps = [
         "//common:default_scalars",
@@ -226,11 +226,11 @@ drake_cc_googletest(
 )
 
 drake_cc_googletest(
-    name = "rtsafe_test",
+    name = "newton_with_bisection_test",
     #copts = ["--spdlog_level debug"],
     args  = ["--spdlog_level debug"],
     deps = [
-        ":rtsafe",
+        ":newton_with_bisection",
     ],
 )
 
