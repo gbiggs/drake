@@ -86,10 +86,12 @@ std::pair<double, int> NewtonWithBisectionFallback(
       // floating point precision. This fact is used in the termination check
       // below to exit whenever a user specifies abs_tolerance = 0.
       root = x_lower - minus_dx;
+      // N.B. There is an extra space before "Bisect" so the console output
+      // matches the indentation for the "Newton" case below.
       DRAKE_LOGGER_DEBUG(
-          "Bisect. k = {:d}. x = {:12.6g}. [x_lower, x_upper] = [{:12.8g}, "
-          "{:12.8g}].",
-          num_evaluations, root, x_lower, x_upper);
+          " Bisect. k = {:d}. x = {:10.4g}. [x_lower, x_upper] = [{:10.4g}, "
+          "{:10.4g}]. dx = {:10.4g}. f = {:10.4g}. dfdx = {:10.4g}.",
+          num_evaluations, root, x_lower, x_upper, -minus_dx, f, df);
       if (x_lower == root) {
         return std::make_pair(root, num_evaluations);
       }
@@ -104,9 +106,9 @@ std::pair<double, int> NewtonWithBisectionFallback(
       // abs_tolerance = 0.
       root -= minus_dx;
       DRAKE_LOGGER_DEBUG(
-          "Newton. k = {:d}. x = {:12.6g}. [x_lower, x_upper] = [{:12.8g}, "
-          "{:12.8g}].",
-          num_evaluations, root, x_lower, x_upper);
+          "Newton. k = {:d}. x = {:10.4g}. [x_lower, x_upper] = [{:10.4g}, "
+          "{:10.4g}]. dx = {:10.4g}. f = {:10.4g}. dfdx = {:10.4g}.",
+          num_evaluations, root, x_lower, x_upper, -minus_dx, f, df);
       if (previous_root == root) {
         // If previous_root equals root "after" the update, it means that
         // minus_dx is small compared to root's value, in floating point
