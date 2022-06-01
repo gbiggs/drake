@@ -67,7 +67,7 @@ std::pair<double, int> NewtonWithBisectionFallback(
   };
 
   auto do_newton = [&f, &df, &root]() {
-    const double dx_negative = f / df;    
+    const double dx_negative = f / df;
     double x = root;
     x -= dx_negative;
     return std::make_pair(x, dx_negative);
@@ -76,7 +76,10 @@ std::pair<double, int> NewtonWithBisectionFallback(
   for (int num_evaluations = 1; num_evaluations <= params.max_iterations;
        ++num_evaluations) {
     if (f == 0) return std::make_pair(root, num_evaluations);
-    
+
+    // N.B. Notice this check is always true for df = 0 (and f != 0 since we
+    // ruled that case out above). Therefore Newton is only called when df != 0,
+    // and the search direction is well defined.
     const bool newton_is_slow = 2.0 * abs(f) > abs(minus_dx * df);
 
     if (newton_is_slow) {
@@ -84,6 +87,8 @@ std::pair<double, int> NewtonWithBisectionFallback(
       DRAKE_LOGGER_DEBUG("Bisect. k = {:d}.", num_evaluations);
     } else {
       std::tie(root, minus_dx) = do_newton();
+      PRINT_VAR(root);
+      PRINT_VAR(minus_dx);
       const bool outside_bracket = root < x_lower || root > x_upper;
       if (outside_bracket) {
         std::tie(root, minus_dx) = do_bisection();
@@ -101,7 +106,7 @@ std::pair<double, int> NewtonWithBisectionFallback(
     if (abs(minus_dx) < params.abs_tolerance)
       return std::make_pair(root, num_evaluations);
 
-    // The one evaluation per iteration.     
+    // The one evaluation per iteration.
     std::tie(f, df) = function(root);
 
     // Update the bracket around root to guarantee that there exist a root

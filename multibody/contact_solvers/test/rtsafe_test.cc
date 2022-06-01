@@ -27,6 +27,7 @@ struct RootFindingTestData {
               << "  Function: " << data.description << std::endl
               << "  [a , b ] = [" << data.a << ", " << data.b << "]"
               << std::endl
+              << "  guess = " << data.guess << std::endl
               << "  [fa, fb] = [" << data.function(data.a).first << ", "
               << data.function(data.b).second << "]" << std::endl
               << "  Root: " << data.root << std::endl
@@ -42,7 +43,8 @@ struct RootFindingTestData {
   // dfdx can be nullopt or {} if the derivative is not needed.
   Function function;
   double a, b;       // Interval used for root finding.
-  double root;       // The true root in [a, b].
+  double guess;      // The initial guess. It must be in [a, b].
+  double root;       // The true root in [a, b].  
   NewtonWithBisectionFallbackParams params;
   // Expected number of iterations, if known.
   std::optional<int> num_iterations;
@@ -56,7 +58,7 @@ std::vector<RootFindingTestData> GenerateTestCases() {
                      double dfx = 1.5;
                      return std::make_pair(f, dfx);
                    },
-                   .a = -4.0, .b = 3.0, .root = -2.0, {},
+                   .a = -4.0, .b = 3.0, .guess = -0.5, .root = -2.0, {},
                    // Since the function is linear, it reaches the solution in
                    // the first iteration (one evaluation). An additional
                    // evaluation is needed by rtsafe to assess convergence.
@@ -70,14 +72,14 @@ std::vector<RootFindingTestData> GenerateTestCases() {
                      double dfx = 2.0 * x + 0.5;
                      return std::make_pair(f, dfx);
                    },
-                   .a = -1.0, .b = 2.0, .root = 1.5});
+                   .a = -1.0, .b = 2.0, .guess = 1.0, .root = 1.5});
   cases.push_back({"y = (x - 1.5) * (x + 2.0) = x² + 0.5 x − 3",
                    [](double x) {
                      double f = (x - 1.5) * (x + 2.0);
                      double dfx = 2.0 * x + 0.5;
                      return std::make_pair(f, dfx);
                    },
-                   .a = -4.0, .b = 1.0, .root = -2.0});
+                   .a = -4.0, .b = 1.0, .guess = 1.0, .root = -2.0});
 
   cases.push_back({"y = arctan(x)",
                    [](double x) {
@@ -85,7 +87,7 @@ std::vector<RootFindingTestData> GenerateTestCases() {
                      double dfx = 1.0 / (1.0 + x * x);
                      return std::make_pair(f, dfx);
                    },
-                   .a = -1.0, .b = 10.0, .root = 0.0});
+                   .a = -1.0, .b = 10.0, .guess = 9.0, .root = 0.0});
 
   // For y = x³ − 2x + 2 with initial guess x0 = 0, Newton-Raphson will enter
   // into an infinity cycle without convergence.
@@ -98,7 +100,7 @@ std::vector<RootFindingTestData> GenerateTestCases() {
                      const double dfx = 3 * x2 - 2;
                      return std::make_pair(f, dfx);
                    },
-                   .a = -3.0, .b = 3.0,
+                   .a = -3.0, .b = 3.0, .guess = 0.0,
                    .root = -1.769292354238631415240409464335});
 
   // This is a difficult case since y' = ∞ at the root x = 0.
@@ -110,7 +112,7 @@ std::vector<RootFindingTestData> GenerateTestCases() {
                      const double dfx = 0.5 / sqrt_x;
                      return std::make_pair(f, dfx);
                    },
-                   .a = -1.0, .b = 4.0, .root = 0.0});
+                   .a = -1.0, .b = 4.0, .guess = 2.0, .root = 0.0});
 
   // For y = x - tan(x) Newton-Raphson will diverge if the guess is outside
   // [4.3, 4.7].
@@ -121,7 +123,7 @@ std::vector<RootFindingTestData> GenerateTestCases() {
                      const double dfx = -tan_x * tan_x;
                      return std::make_pair(f, dfx);
                    },
-                   .a = 2.0, .b = 4.7,
+                   .a = 2.0, .b = 4.7, .guess = 3.0,
                    .root = 4.4934094579090641753078809272803});
 
   // Newton-Raphson struggles with this case since the derivative also goes to
@@ -133,7 +135,7 @@ std::vector<RootFindingTestData> GenerateTestCases() {
                      const double dfx = 3.0 * arg * arg;
                      return std::make_pair(f, dfx);
                    },
-                   .a = 0.0, .b = 2.0, .root = 1.5});
+                   .a = 0.0, .b = 2.0, .guess = 1.0, .root = 1.5});
 
   // Discontinuous derivative. A linear function plus a discontinuity will cause
   // the traditional Newton-Raphson to fall into an infinite cycle without
@@ -145,7 +147,18 @@ std::vector<RootFindingTestData> GenerateTestCases() {
                      const double dfx = 1.0;
                      return std::make_pair(f, dfx);
                    },
-                   .a = -1.0, .b = 1.5, .root = -0.3});
+                   .a = -1.0, .b = 1.5, .guess = 0.5, .root = -0.3});
+
+  // This case is setup so that the derivative of the function at the initial
+  // guess is zero, and therefore the Newton direction is not well defined.
+  cases.push_back({"y = x * (x - 1)",
+                   [](double x) {
+                     const double f = x * (x - 1.0);
+                     const double dfx = 2.0 * x - 1.0;
+                     return std::make_pair(f, dfx);
+                   },
+                   .a = -1.0, .b = 0.6, .guess = 0.5, .root = 0.0});
+
   return cases;
 }
 
@@ -164,9 +177,8 @@ TEST_P(RootFindingTest, VerifyExpectedResults) {
   //const double x =
     //  NewtonWithBisectionFallback<double>(data.function, data.a, data.b, data.tolerance, &num_iters);
 
-  const double x_guess = 0.5 * (data.a + data.b);
   const auto [x, num_iterations] =
-      NewtonWithBisectionFallback(data.function, data.a, data.b, x_guess, data.params);
+      NewtonWithBisectionFallback(data.function, data.a, data.b, data.guess, data.params);
   EXPECT_NEAR(x, data.root, data.params.abs_tolerance);
   if (data.num_iterations) {
     EXPECT_EQ(num_iterations, *data.num_iterations);
