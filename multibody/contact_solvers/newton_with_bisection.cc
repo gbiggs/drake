@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <iostream>
+//#include <math>
 #include <tuple>
 #include <utility>
 
@@ -31,20 +32,21 @@ std::pair<double, int> DoNewtonWithBisectionFallback(
   // TODO(amcastro-tri): Consider removing this extra evaluation whenever the
   // users does know that f_lower * f_upper < 0.
   auto [f_lower, df_lower] = function(x_lower);  // First evaluation.
-  if (f_lower == 0) return std::make_pair(x_lower, 1);
+  if (abs(f_lower) < abs_tolerance) return std::make_pair(x_lower, 1);
 
   auto [f_upper, df_upper] = function(x_upper);  // Second evaluation.
-  if (f_upper == 0) return std::make_pair(x_upper, 2);
+  if (abs(f_upper) < abs_tolerance) return std::make_pair(x_upper, 2);
 
   // Verify there is a root inside the bracket. Notice that f_lower * f_upper !=
   // 0 since the case f_lower == 0 || f_upper == 0 has been ruled out above.
-  DRAKE_THROW_UNLESS(f_lower * f_upper < 0);
+  DRAKE_THROW_UNLESS(std::signbit(f_lower) ^ std::signbit(f_upper));
 
   double root = x_guess;  // Initialize to user supplied guess.
   double minus_dx = (x_lower - x_upper);
   double f, df;
-  std::tie(f, df) = function(root);  // Third evaluation.
-  if (f == 0) return std::make_pair(root, 3);
+  std::tie(f, df) = function(root);  // Third evaluation.  
+  if (abs(f) < abs_tolerance) return std::make_pair(root, 3);
+  double f_previous = f;
 
   // Helper to perform a bisection update. It returns the pair (root, -dx).
   auto do_bisection = [&x_upper, &x_lower]() {
@@ -96,19 +98,21 @@ std::pair<double, int> DoNewtonWithBisectionFallback(
       } else {
         DRAKE_LOGGER_DEBUG("Newton. k = {:d}.", num_evaluations);
       }
-    }
+    }    
+
+    //if (abs(minus_dx) < abs_tolerance)
+    //  return std::make_pair(root, num_evaluations);
+
+    // The one evaluation per iteration.
+    f_previous = f;
+    std::tie(f, df) = function(root);
 
     DRAKE_LOGGER_DEBUG(
         "x = {:10.4g}. [x_lower, x_upper] = [{:10.4g}, "
         "{:10.4g}]. dx = {:10.4g}. f = {:10.4g}. dfdx = {:10.4g}.",
         root, x_lower, x_upper, -minus_dx, f, df);
 
-    if (abs(minus_dx) < abs_tolerance)
-      return std::make_pair(root, num_evaluations);
-
-    // The one evaluation per iteration.
-    std::tie(f, df) = function(root);
-    if (f == 0) return std::make_pair(root, num_evaluations);
+    if (abs(f) < abs_tolerance) return std::make_pair(root, num_evaluations);
 
     // Update the bracket around root to guarantee that there exist a root
     // within the interval [x_lower, x_upper].

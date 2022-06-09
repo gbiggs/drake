@@ -43,7 +43,7 @@ struct RootFindingTestData {
   double a, b;   // Interval used for root finding.
   double guess;  // The initial guess. It must be in [a, b].
   double root;   // The true root in [a, b].
-  double abs_tolerance{kEpsilon};  // Absolute tolerance for the solver.
+  double abs_tolerance{5.0 * kEpsilon};  // Absolute tolerance for the solver.
   int max_iterations{100};  // Solver maximum number of iterations.
   // Expected number of iterations, if known.
   std::optional<int> num_iterations;
