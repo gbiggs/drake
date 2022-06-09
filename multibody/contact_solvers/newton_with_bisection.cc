@@ -33,8 +33,8 @@ std::pair<double, int> DoNewtonWithBisectionFallback(
   auto [f_lower, df_lower] = function(x_lower);  // First evaluation.
   if (f_lower == 0) return std::make_pair(x_lower, 1);
 
-  auto [f_upper, df_upper] = function(x_upper);
-  if (f_upper == 0) return std::make_pair(x_upper, 2);  // Second evaluation.
+  auto [f_upper, df_upper] = function(x_upper);  // Second evaluation.
+  if (f_upper == 0) return std::make_pair(x_upper, 2);
 
   // Verify there is a root inside the bracket. Notice that f_lower * f_upper !=
   // 0 since the case f_lower == 0 || f_upper == 0 has been ruled out above.
@@ -42,8 +42,9 @@ std::pair<double, int> DoNewtonWithBisectionFallback(
 
   double root = x_guess;  // Initialize to user supplied guess.
   double minus_dx = (x_lower - x_upper);
-  auto [f, df] = function(root);               // Third evaluation.
-  if (f == 0) return std::make_pair(root, 3);  // Third evaluation.
+  double f, df;
+  std::tie(f, df) = function(root);  // Third evaluation.
+  if (f == 0) return std::make_pair(root, 3);
 
   // Helper to perform a bisection update. It returns the pair (root, -dx).
   auto do_bisection = [&x_upper, &x_lower]() {
@@ -71,6 +72,16 @@ std::pair<double, int> DoNewtonWithBisectionFallback(
     // N.B. Notice this check is always true for df = 0 (and f != 0 since we
     // ruled that case out above). Therefore Newton is only called when df != 0,
     // and the search direction is well defined.
+    // N.B. This check is based on the check used within method rtsafe from
+    // Numerical Recipes. While rtsafe uses dx from the previous to last
+    // iteration, here we use dx from precisely the previous iteration. We found
+    // this to save a few iterations when compared to rtsafe.
+    // N.B. One way to think about this: if we assume 0 ≈ |fᵏ| << |fᵏ⁻¹| (this
+    // would be the case when Newton is converging quadratically), then we can
+    // estimate fᵏ⁻¹ from values at the last iteration as fᵏ⁻¹ ≈ fᵏ + dx⋅f'ᵏ ≈
+    // dx⋅f'ᵏ. Therefore the inequality below is an approximation for |2⋅fᵏ| >
+    // |fᵏ⁻¹|. That is, we use Newton's method when |fᵏ| < |fᵏ⁻¹|/2. Otherwise
+    // we use bisection which guarantees convergence, though linearly.
     const bool newton_is_slow = 2.0 * abs(f) > abs(minus_dx * df);
 
     if (newton_is_slow) {
@@ -115,9 +126,9 @@ std::pair<double, int> DoNewtonWithBisectionFallback(
   // small.
   throw std::runtime_error(
       fmt::format("NewtonWithBisectionFallback did not converge.\n"
-                  "|x - x_prev| = {}. |x_upper-x_lower| = {}",
+                  "|dx| = {}. |x_upper - x_lower| = {}",
                   abs(minus_dx), abs(x_upper - x_lower)));
-};
+}
 
 }  // namespace internal
 }  // namespace contact_solvers

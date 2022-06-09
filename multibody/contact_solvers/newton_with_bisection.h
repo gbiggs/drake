@@ -19,14 +19,24 @@ namespace internal {
   previous iterate xᵏ and the next iteration xᵏ⁺¹ is below the absolute
   tolerance `abs_tolerance`, i.e. when |xᵏ⁺¹ - xᵏ| < abs_tolerance.
 
-  This method expect that sign(function(x_lower)) != sign(function_x_upper). For
-  continuous functions, this ensures there exists a root in [x_lower, x_upper].
-
   This method iteratively shrinks the bracket containing the root. Moreover, it
   switches to bisection whenever a Newton iterate falls outside the bracket or
   when Newton's method is slow. Using this procedure, this method is guaranteed
-  to find a root (which might be non-unique) within [x_lower, x_upper], with
-  accuracy given by `abs_tol`.
+  to find a root (which might not be unique) within [x_lower, x_upper], with
+  accuracy given by `abs_tolerance`.
+
+  This method expects that sign(function(x_lower)) != sign(function(x_upper)).
+  For continuous functions, this ensures there exists a root in [x_lower,
+  x_upper]. For discontinuous functions, the solver "sees" a discontinuity as a
+  sharp transition within a narrow gap of size `abs_tolerance`. Therefore the
+  solver will return a "root" located at where the discontinuity occurs. For
+  instance, consider the function y(x) = 1/(x-c). While clearly discontinuous at
+  x = c, this method will return c as the root whenever c is within the supplied
+  bracket. Another example more common in practice is the function y(x) = x +
+  H(x) - 1/2, with H(x) the Heaviside function. While discontinuous at x = 0,
+  this method will return x = 0 as the root.
+
+  @returns the pair (root, number_of_evaluations)
 
   @pre x_lower <= x_upper
   @pre x_guess is in [x_lower, x_upper]
