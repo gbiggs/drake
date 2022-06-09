@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <type_traits>
+#include <deque>
 #include <utility>
 #include <vector>
 
@@ -14,7 +15,8 @@
 #include "drake/multibody/contact_solvers/newton_with_bisection.h"
 
 #include <iostream>
-#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
+//#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
+#define PRINT_VAR(a) (void)a;
 
 namespace drake {
 namespace multibody {
@@ -120,6 +122,7 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
   auto context = model_->MakeContext();
   auto scratch = model_->MakeContext();
   SearchDirectionData search_direction_data(nv, nk);
+  std::deque<double> cost_deque;  // Save last M values for GLL line search.
   stats_ = SolverStats();
   // The supernodal solver is expensive to instantiate and therefore we only
   // instantiate when needed.
@@ -136,6 +139,9 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
   // Start Newton iterations.
   int k = 0;
   double ell_previous = model_->EvalCost(*context);
+  cost_deque.push_front(ell_previous);
+  double cost_max = ell_previous;
+  double cost_max_previous = cost_max;
   bool converged = false;
   for (;; ++k) {
     // We first verify the stopping criteria. If satisfied, we skip expensive
@@ -173,12 +179,21 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
 
     double alpha = 1.0;
     int ls_iters = 0;
-    if (parameters_.exact_line_search) {
-      std::tie(alpha, ls_iters) = PerformExactLineSearch(
-          *context, search_direction_data, scratch.get());
-    } else {
-      std::tie(alpha, ls_iters) = PerformBackTrackingLineSearch(
-          *context, search_direction_data, scratch.get());
+    switch (parameters_.line_search_type) {
+      case SapSolverParameters::LineSearchType::kBackTracking:
+        std::tie(alpha, ls_iters) = PerformBackTrackingLineSearch(
+            *context, search_direction_data, scratch.get());
+        break;
+      case SapSolverParameters::LineSearchType::kExact:
+        std::tie(alpha, ls_iters) = PerformExactLineSearch(
+            *context, search_direction_data, scratch.get());
+        break;
+      case SapSolverParameters::LineSearchType::kGll:
+        const bool use_armijo = k < parameters_.gll_num_armijos;
+        std::tie(alpha, ls_iters) =
+            PerformGllLineSearch(*context, search_direction_data, cost_deque,
+                                 use_armijo, scratch.get());
+        break;
     }
 
     stats_.num_line_search_iters += ls_iters;
@@ -187,6 +202,20 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
     model_->GetMutableVelocities(context.get()) += alpha * dv;
 
     const double ell = model_->EvalCost(*context);
+
+    // At iteration k, the cost queue will always contain ell_k plus all
+    // previous costs ell_{k-j}, with j = 0, gll_num_previous_costs.
+    cost_deque.push_front(ell);
+    if (static_cast<int>(cost_deque.size()) >
+        parameters_.gll_num_previous_costs + 1)
+      cost_deque.pop_back();
+    cost_max_previous = cost_max;      
+    cost_max = *std::max_element(cost_deque.begin(), cost_deque.end());      
+
+    // Sanity check size of the costs queue.
+    DRAKE_DEMAND(static_cast<int>(cost_deque.size()) <=
+                 parameters_.gll_num_previous_costs + 1);
+
     const double ell_scale = (ell + ell_previous) / 2.0;
     // N.B. Even though theoretically we expect ell < ell_previous, round-off
     // errors might make the difference ell_previous - ell negative, within
@@ -198,8 +227,15 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
     // TODO(amcastro-tri): We might need to loosen this slop or make this an
     // ASSERT instead.
     const double slop =
-        50 * std::numeric_limits<double>::epsilon() * std::max(1.0, ell_scale);
-    DRAKE_DEMAND(ell <= ell_previous + slop);
+        50 * std::numeric_limits<double>::epsilon() * std::max(1.0, ell_scale);    
+    if (parameters_.line_search_type ==
+        SapSolverParameters::LineSearchType::kGll) {
+      // GLL allows non-monotone convergence. However the sequence {cost_max} is
+      // nonincreasing.
+      DRAKE_DEMAND(cost_max <= cost_max_previous + slop);          
+    } else {
+      DRAKE_DEMAND(ell <= ell_previous + slop);
+    }
 
     // N.B. Here we want alpha≈1 and therefore we impose alpha > 0.5, an
     // arbitrarily "large" value. This is to avoid a false positive on the
@@ -423,12 +459,102 @@ std::pair<T, int> SapSolver<T>::PerformBackTrackingLineSearch(
 }
 
 template <typename T>
+std::pair<T, int> SapSolver<T>::PerformGllLineSearch(
+    const systems::Context<T>& context,
+    const SearchDirectionData& search_direction_data,
+    const std::deque<double>& cost_deque,
+    bool use_armijo, 
+    systems::Context<T>* scratch) const {
+  using std::abs;
+  // Line search parameters.
+  const double rho = parameters_.ls_rho;
+  const double c = parameters_.ls_c;
+  const int max_iterations = parameters_.ls_max_iterations;
+
+  // Quantities at alpha = 0.
+  const T& ell0 = model_->EvalCost(context);
+  const VectorX<T>& ell_grad_v0 = model_->EvalCostGradient(context);
+
+  // dℓ/dα(α = 0) = ∇ᵥℓ(α = 0)⋅Δv.
+  const VectorX<T>& dv = search_direction_data.dv;
+  const T dell_dalpha0 = ell_grad_v0.dot(dv);
+
+  T alpha = parameters_.ls_alpha_max;
+  T ell = CalcCostAlongLine(context, search_direction_data, alpha, scratch);
+
+  const double kTolerance = 50 * std::numeric_limits<double>::epsilon();
+  // N.B. We expect ell_scale != 0 since otherwise SAP's optimality condition
+  // would've been reached and the solver would not reach this point.
+  // N.B. ell = 0 implies v = v* and gamma = 0, for which the momentum residual
+  // is zero.
+  // Given that the Hessian in SAP is SPD we know that dell_dalpha0 < 0
+  // (strictly). dell_dalpha0 = 0 would mean that we reached the optimum but
+  // most certainly due to round-off errors or very tight user specified
+  // optimality tolerances, the optimality condition was not met and SAP
+  // performed an additional iteration to find a search direction that, most
+  // likely, is close to zero. We therefore detect this case with dell_dalpha0 ≈
+  // 0 and accept the search direction with alpha = 1.
+  const T ell_scale = 0.5 * (ell + ell0);
+  if (abs(dell_dalpha0 / ell_scale) < kTolerance) return std::make_pair(1.0, 0);
+
+  // dℓ/dα(α = 0) is guaranteed to be strictly negative given the the Hessian of
+  // the cost is positive definite. Only round-off errors in the factorization
+  // of the Hessian for ill-conditioned systems (small regularization) can
+  // destroy this property. If so, we abort given that'd mean the model must be
+  // revisited.
+  if (dell_dalpha0 >= 0) {
+    throw std::runtime_error(
+        "The cost does not decrease along the search direction. This is "
+        "usually caused by an excessive accumulation round-off errors for "
+        "ill-conditioned systems. Consider revisiting your model.");
+  }  
+
+  // Verifies if ell(alpha) satisfies GLL's criterion.
+  // TODO: Verify the sequence {cost_max} is nonincreasing. Eq. (5) in GLL's
+  // Theorem.
+  const double cost_max =
+      use_armijo ? cost_deque.front()
+                 : *std::max_element(cost_deque.begin(), cost_deque.end());
+  auto satisfies_gll = [c, cost_max, dell_dalpha0](const T& alpha_in,
+                                                   const T& ell_in) {
+    return ell_in < cost_max + c * alpha_in * dell_dalpha0;
+  };
+
+  // Initialize previous iteration values.
+  //T alpha_prev = alpha;
+  //T ell_prev = ell;
+
+  int iteration = 1;  // We already evaluated cost at ls_alpha_max.
+  for (; iteration < max_iterations; ++iteration) {    
+    //if (ell > ell_prev && satisfies_gll(alpha, ell)) {
+    if (satisfies_gll(alpha, ell)) {      
+      return std::make_pair(alpha, iteration);
+    }
+    alpha *= rho;
+    ell = CalcCostAlongLine(context, search_direction_data, alpha, scratch);
+    //alpha_prev = alpha;
+    //ell_prev = ell;
+  }
+
+  // If we are here, the line-search could not find a valid parameter that
+  // satisfies GLL's criterion.
+  throw std::runtime_error(
+      "Line search reached the maximum number of iterations. Either we need to "
+      "increase the maximum number of iterations parameter or to condition the "
+      "problem better.");
+
+  // Silence "no-return value" warning from the compiler.
+  DRAKE_UNREACHABLE();
+}
+
+template <typename T>
 std::pair<T, int> SapSolver<T>::PerformExactLineSearch(
     const systems::Context<T>&, const SearchDirectionData&,
     systems::Context<T>*) const {
   throw std::logic_error(
       "SapSolver::PerformExactLineSearch(): Only T = double is supported.");
 }
+
 
 template <>
 std::pair<double, int> SapSolver<double>::PerformExactLineSearch(
@@ -537,11 +663,11 @@ std::pair<double, int> SapSolver<double>::PerformExactLineSearch(
   // The most likely solution close to the optimal solution.
   const double alpha_guess = 1.0;
 
-  std::cout << "Calling DoNewtonWithBisectionFallback():\n";
+  //std::cout << "Calling DoNewtonWithBisectionFallback():\n";
   const auto [alpha, num_iters] = DoNewtonWithBisectionFallback(
       cost_and_gradient, 0., parameters_.ls_alpha_max, alpha_guess, kTolerance,
       100);
-  std::cout << std::endl;      
+  //std::cout << std::endl;      
 
   return std::make_pair(alpha, num_iters);
 }

@@ -36,7 +36,7 @@
 #include <iostream>
 #define PRINT_VAR(a) std::cout << #a ": " << a << std::endl;
 #define PRINT_VARn(a) std::cout << #a ":\n" << a << std::endl;
-
+//#define PRINT_VAR(a) (void)a;
 
 namespace drake {
 namespace multibody {
@@ -108,7 +108,12 @@ DEFINE_int32(verbosity_level, 0,
              "Verbosity level of the new primal solver. See "
              "UnconstrainedPrimalSolverParameters.");
 DEFINE_string(line_search, "exact",
-              "Primal solver line-search. 'exact', 'inexact'");
+              "Primal solver line-search. 'exact', 'backtracking', 'GLL'");
+DEFINE_int32(
+    gll_M, 5,
+    "Number previous costs, in addition to current. M in GLL's paper.");
+DEFINE_int32(sap_max_iterations, 40, "Max SAP iterations.");
+DEFINE_int32(gll_N, 5, "Num regular Armijo's before GLL. N in GLL's paper.");
 DEFINE_double(rt_factor, 1.0e-3, "Rt_factor");
 DEFINE_double(alpha, 1.0, "Rigid time scale factor.");
 DEFINE_double(sigma, 1.0e-3, "Friction dimensionless parameterization.");
@@ -118,7 +123,6 @@ DEFINE_bool(log_stats, true, "Log all iterations stats.");
 DEFINE_bool(log_cond_number, false,
             "Estimate and log condition number (expensive).");
 
-DEFINE_bool(ls_exact, true, "ls_exact");
 DEFINE_double(ls_alpha_max, 1.25, "ls_alpha_max");
 DEFINE_double(ls_rho, 0.8, "ls_rho");
 
@@ -495,9 +499,25 @@ int do_main() {
     (void)manager;
     plant.SetDiscreteUpdateManager(std::move(owned_contact_manager));  
     SapSolverParameters parameters;
-    parameters.exact_line_search = FLAGS_ls_exact;
+    
+
+    if (FLAGS_line_search == "exact") {
+      parameters.line_search_type = SapSolverParameters::LineSearchType::kExact;
+    } else if (FLAGS_line_search == "backtracking") {
+      parameters.line_search_type =
+          SapSolverParameters::LineSearchType::kBackTracking;
+    } else if (FLAGS_line_search == "GLL") {
+      parameters.line_search_type = SapSolverParameters::LineSearchType::kGll;
+    } else {
+      throw std::runtime_error("Unknown line search type: '" +
+                               FLAGS_line_search + "'.");
+    }
+
     parameters.ls_alpha_max = FLAGS_ls_alpha_max;
     parameters.ls_rho = FLAGS_ls_rho;
+    parameters.gll_num_previous_costs = FLAGS_gll_M;
+    parameters.gll_num_armijos = FLAGS_gll_N;
+    parameters.max_iterations = FLAGS_sap_max_iterations;
     manager->set_sap_solver_parameters(parameters);
   }
 

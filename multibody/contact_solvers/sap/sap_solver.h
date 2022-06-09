@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -106,7 +107,16 @@ struct SapSolverParameters {
   double ls_c{1.0e-4};        // Armijo's criterion parameter.
   double ls_rho{0.8};         // Backtracking search parameter.
 
-  bool exact_line_search{true};
+  int gll_num_previous_costs{5};  // M in GLL paper.
+  // Number of regular Armijo iterations before GLL. N in GLL paper.
+  int gll_num_armijos{1};  
+
+  enum LineSearchType {
+    kBackTracking,
+    kExact,
+    kGll
+  };
+  LineSearchType line_search_type{LineSearchType::kExact};
 
   // Maximum line search parameter allowed.
   // Using this value of ls_alpha_max ensures that SAP's line search uses alpha
@@ -276,6 +286,13 @@ class SapSolver {
       const systems::Context<T>& context,
       const SearchDirectionData& search_direction_data,
       systems::Context<T>* scratch_workspace) const;
+
+  std::pair<T, int> PerformGllLineSearch(
+      const systems::Context<T>& context,
+      const SearchDirectionData& search_direction_data,
+      const std::deque<double>& cost_queue,
+      bool use_armijo,
+      systems::Context<T>* scratch) const;
 
   std::pair<T, int> PerformExactLineSearch(
       const systems::Context<T>& context,
