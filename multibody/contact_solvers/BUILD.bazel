@@ -138,9 +138,9 @@ drake_cc_library(
 
 drake_cc_library(
     name = "newton_with_bisection",
-    srcs = [],
+    srcs = ["newton_with_bisection.cc"],
     hdrs = ["newton_with_bisection.h"],
-    copts = ["-Wno-error=unused-parameter", "-Wno-error=unused-variable", "-w"],
+    copts = ["-UNDEBUG", "-g", "-Wno-error=unused-parameter", "-Wno-error=unused-variable", "-w"],
     deps = [
         "//common:default_scalars",
         "//common:essential",

@@ -339,6 +339,11 @@ SapSolverStatus SapSolver<double>::SolveWithGuess(
     const SapContactProblem<double>&, const VectorX<double>&,
     SapSolverResults<double>*);
 
+template <>
+std::pair<double, int> SapSolver<double>::PerformExactLineSearch(
+    const systems::Context<double>&, const SearchDirectionData&,
+    systems::Context<double>*) const;
+
 }  // namespace internal
 }  // namespace contact_solvers
 }  // namespace multibody

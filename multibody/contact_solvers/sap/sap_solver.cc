@@ -11,7 +11,10 @@
 #include "drake/common/test_utilities/limit_malloc.h"
 #include "drake/math/linear_solve.h"
 #include "drake/multibody/contact_solvers/supernodal_solver.h"
-#include "drake/multibody/contact_solvers/rtsafe.h"
+#include "drake/multibody/contact_solvers/newton_with_bisection.h"
+
+#include <iostream>
+#define PRINT_VAR(a) std::cout << #a": " << a << std::endl;
 
 namespace drake {
 namespace multibody {
@@ -421,9 +424,17 @@ std::pair<T, int> SapSolver<T>::PerformBackTrackingLineSearch(
 
 template <typename T>
 std::pair<T, int> SapSolver<T>::PerformExactLineSearch(
-    const systems::Context<T>& context,
+    const systems::Context<T>&, const SearchDirectionData&,
+    systems::Context<T>*) const {
+  throw std::logic_error(
+      "SapSolver::PerformExactLineSearch(): Only T = double is supported.");
+}
+
+template <>
+std::pair<double, int> SapSolver<double>::PerformExactLineSearch(
+    const systems::Context<double>& context,
     const SearchDirectionData& search_direction_data,
-    systems::Context<T>* scratch) const {
+    systems::Context<double>* scratch) const {
   using std::abs;
 
   // Ensure everythin is allocated beyond this point.
@@ -440,15 +451,21 @@ std::pair<T, int> SapSolver<T>::PerformExactLineSearch(
   //const int max_iterations = parameters_.ls_max_iterations;
 
   // Quantities at alpha = 0.
-  const T& ell0 = model_->EvalCost(context);
-  const VectorX<T>& ell_grad_v0 = model_->EvalCostGradient(context);
+  const double ell0 = model_->EvalCost(context);
+  const VectorX<double>& ell_grad_v0 = model_->EvalCostGradient(context);
 
   // dℓ/dα(α = 0) = ∇ᵥℓ(α = 0)⋅Δv.
-  const VectorX<T>& dv = search_direction_data.dv;
-  const T dell_dalpha0 = ell_grad_v0.dot(dv);
+  const VectorX<double>& dv = search_direction_data.dv;
+  const double dell_dalpha0 = ell_grad_v0.dot(dv);
 
-  T alpha = parameters_.ls_alpha_max;
-  T ell = CalcCostAlongLine(context, search_direction_data, alpha, scratch);
+  // Cost and gradient at alpha_max.
+  double dell, d2ell;
+  const double ell_alpha_max =
+      CalcCostAlongLine(context, search_direction_data,
+                        parameters_.ls_alpha_max, scratch, &dell, &d2ell);
+  // If the cost keeps decreasing at alpha_max, then alpha = alpha_max is a good
+  // step size.                        
+  if (dell < 0) return std::make_pair(parameters_.ls_alpha_max, 0);
 
   const double kTolerance = 50 * std::numeric_limits<double>::epsilon();
   // N.B. We expect ell_scale != 0 since otherwise SAP's optimality condition
@@ -462,8 +479,10 @@ std::pair<T, int> SapSolver<T>::PerformExactLineSearch(
   // performed an additional iteration to find a search direction that, most
   // likely, is close to zero. We therefore detect this case with dell_dalpha0 ≈
   // 0 and accept the search direction with alpha = 1.
-  const T ell_scale = 0.5 * (ell + ell0);
+  const double ell_scale = 0.5 * (ell_alpha_max + ell0);
   if (abs(dell_dalpha0 / ell_scale) < kTolerance) return std::make_pair(1.0, 0);
+  PRINT_VAR(ell_scale);
+  PRINT_VAR(abs(dell_dalpha0 / ell_scale));
 
   // dℓ/dα(α = 0) is guaranteed to be strictly negative given the the Hessian of
   // the cost is positive definite. Only round-off errors in the factorization
@@ -485,38 +504,44 @@ std::pair<T, int> SapSolver<T>::PerformExactLineSearch(
   // struct so that cost_and_gradient only needs to capture a single pointer.
   // This avoid heap allocation when calling RtSafe.
   struct EvalData {
-    const SapSolver<T>* solver;
-    const Context<T>& context0;  // Context at alpha = 0.
+    const SapSolver<double>* solver;
+    const Context<double>& context0;  // Context at alpha = 0.
     const SearchDirectionData& search_direction_data;
-    Context<T>& scratch;   // Context at alpha != 0.
-    const T ell_scale;
+    Context<double>& scratch;   // Context at alpha != 0.
+    const double ell_scale;
   };
   EvalData data{this, context, search_direction_data, *scratch, ell_scale};
 
-  auto cost_and_gradient = [&data](const T& x, std::optional<T*> dfdx) {
+  auto cost_and_gradient = [&data](double x) {
     // We normalize as:
     // ell_tilde = (ell-ell_min)/ell_delta
 
     // x == alpha
     // f == dell_dalpha
     // dfdx == d2ell_dalpha2
-    T dell_dalpha;
-    T d2ell_dalpha2;
+    double dell_dalpha;
+    double d2ell_dalpha2;
     data.solver->CalcCostAlongLine(data.context0, data.search_direction_data, x,
                                    &data.scratch, &dell_dalpha, &d2ell_dalpha2);
 
-    if (dfdx) *dfdx.value() = d2ell_dalpha2 / data.ell_scale;
-    return dell_dalpha / data.ell_scale;
+    //PRINT_VAR(x);
+    //PRINT_VAR(dell_dalpha / data.ell_scale);
+    //PRINT_VAR(d2ell_dalpha2 / data.ell_scale);
+
+    return std::make_pair(dell_dalpha / data.ell_scale,
+                          d2ell_dalpha2 / data.ell_scale);
   };
 
-//  LimitMalloc guard({.max_num_allocations = 0});
+  //  LimitMalloc guard({.max_num_allocations = 0});
 
-  int num_iters = 0;
   // The most likely solution close to the optimal solution.
-  const T alpha_guess = 1.0;
-  const bool check_interval = false;
-  alpha = RtSafe<T>(cost_and_gradient, 0, parameters_.ls_alpha_max, kTolerance,
-                    alpha_guess, check_interval, &num_iters);
+  const double alpha_guess = 1.0;
+
+  std::cout << "Calling DoNewtonWithBisectionFallback():\n";
+  const auto [alpha, num_iters] = DoNewtonWithBisectionFallback(
+      cost_and_gradient, 0., parameters_.ls_alpha_max, alpha_guess, kTolerance,
+      100);
+  std::cout << std::endl;      
 
   return std::make_pair(alpha, num_iters);
 }
