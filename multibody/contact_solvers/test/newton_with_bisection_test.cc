@@ -65,9 +65,7 @@ std::vector<RootFindingTestData> GenerateTestCases() {
                    .max_iterations = 100,
                    // Since the function is linear, it reaches the solution in
                    // the first iteration (one evaluation).
-                   // DoNewtonWithBisection() uses two additional evaluations to
-                   // ensure the solution is bracketed.
-                   .num_iterations = 3});
+                   .num_iterations = 1});
 
   // This function has two roots. We push them as two separate cases with two
   // different search intervals.
@@ -189,9 +187,13 @@ TEST_P(RootFindingTest, VerifyExpectedResults) {
   // we see more than Test/0, Test/1, etc.
   std::cout << data << std::endl;
 
+  // Create bracket.
+  const Bracket bracket(data.a, data.function(data.a).first, data.b,
+                  data.function(data.b).first);
+
   // Find root in the interval [data.a, data.b]
   const auto [x, num_iterations] =
-      DoNewtonWithBisectionFallback(data.function, data.a, data.b, data.guess,
+      DoNewtonWithBisectionFallback(data.function, bracket, data.guess,
                                     data.abs_tolerance, data.max_iterations);
   EXPECT_NEAR(x, data.root, data.abs_tolerance);
   if (data.num_iterations) {

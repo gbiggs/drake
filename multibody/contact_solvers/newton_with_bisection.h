@@ -5,6 +5,7 @@
 #include <tuple>
 #include <utility>
 
+#include "drake/common/drake_copyable.h"
 #include "drake/common/drake_throw.h"
 #include "drake/common/text_logging.h"
 
@@ -12,6 +13,48 @@ namespace drake {
 namespace multibody {
 namespace contact_solvers {
 namespace internal {
+
+class Bracket {
+ public:
+  DRAKE_DEFAULT_COPY_AND_MOVE_AND_ASSIGN(Bracket);
+
+  Bracket(double x_lower, double f_lower, double x_upper, double f_upper)
+      : x_lower_(x_lower),
+        f_lower_(f_lower),
+        x_upper_(x_upper),
+        f_upper_(f_upper) {
+    DRAKE_DEMAND(x_lower < x_upper);
+    DRAKE_DEMAND(has_different_sign(f_lower, f_upper));
+  }
+
+  bool inside(double x) {
+    return x_lower_ <= x && x <= x_upper_;
+  }
+
+  void Update(double x, double f) {
+    if (has_different_sign(f, f_upper_)) {
+      x_lower_ = x;
+      f_lower_ = f;
+    } else {
+      x_upper_ = x;
+      f_upper_ = f;
+    }
+  }
+  
+  double x_lower() const { return x_lower_; }
+  double x_upper() const { return x_upper_; }
+  double f_lower() const { return f_lower_; }
+  double f_upper() const { return f_upper_; }
+
+ private:
+  static bool has_different_sign(double a, double b) {
+    return std::signbit(a) ^ std::signbit(b);
+  }
+  double x_lower_;
+  double f_lower_;
+  double x_upper_;
+  double f_upper_;
+};
 
 /*
   Uses a Newton-Raphson method to compute a root of `function` within the
@@ -46,7 +89,7 @@ namespace internal {
 */
 std::pair<double, int> DoNewtonWithBisectionFallback(
     const std::function<std::pair<double, double>(double)>& function,
-    double x_lower, double x_upper, double x_guess, double abs_tolerance,
+    Bracket bracket, double x_guess, double abs_tolerance,
     int max_iterations);
 
 }  // namespace internal

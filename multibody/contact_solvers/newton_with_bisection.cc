@@ -2,7 +2,6 @@
 
 #include <functional>
 #include <iostream>
-//#include <math>
 #include <tuple>
 #include <utility>
 
@@ -14,48 +13,41 @@ namespace multibody {
 namespace contact_solvers {
 namespace internal {
 
-std::pair<double, int> DoNewtonWithBisectionFallback(
+std::pair<double, int>
+DoNewtonWithBisectionFallback(
     const std::function<std::pair<double, double>(double)>& function,
-    double x_lower, double x_upper, double x_guess, double abs_tolerance,
+    Bracket bracket, double x_guess, double abs_tolerance,
     int max_iterations) {
   using std::abs;
   using std::swap;
   // Pre-conditions on the bracket.
-  DRAKE_THROW_UNLESS(x_lower <= x_guess && x_guess <= x_upper);
+  DRAKE_THROW_UNLESS(bracket.inside(x_guess));
 
   // Pre-conditions on the algorithm's parameters.
   DRAKE_THROW_UNLESS(abs_tolerance > 0);
   DRAKE_THROW_UNLESS(max_iterations > 0);
 
-  // These checks verify there is an appropriate bracket around the root,
-  // though at the expense of additional evaluations.
-  // TODO(amcastro-tri): Consider removing this extra evaluation whenever the
-  // users does know that f_lower * f_upper < 0.
-  auto [f_lower, df_lower] = function(x_lower);  // First evaluation.
-  if (abs(f_lower) < abs_tolerance) return std::make_pair(x_lower, 1);
+  if (abs(bracket.f_lower()) < abs_tolerance)
+    return std::make_pair(bracket.x_lower(), 0);
 
-  auto [f_upper, df_upper] = function(x_upper);  // Second evaluation.
-  if (abs(f_upper) < abs_tolerance) return std::make_pair(x_upper, 2);
-
-  // Verify there is a root inside the bracket. Notice that f_lower * f_upper !=
-  // 0 since the case f_lower == 0 || f_upper == 0 has been ruled out above.
-  DRAKE_THROW_UNLESS(std::signbit(f_lower) ^ std::signbit(f_upper));
+  if (abs(bracket.f_upper()) < abs_tolerance)
+    return std::make_pair(bracket.x_upper(), 0);
 
   double root = x_guess;  // Initialize to user supplied guess.
-  double minus_dx = (x_lower - x_upper);
+  double minus_dx = bracket.x_lower() - bracket.x_upper();
   double f, df;
-  std::tie(f, df) = function(root);  // Third evaluation.  
-  if (abs(f) < abs_tolerance) return std::make_pair(root, 3);
+  std::tie(f, df) = function(root);  // First evaluation.
+  if (abs(f) < abs_tolerance) return std::make_pair(root, 1);
   double f_previous = f;
 
   // Helper to perform a bisection update. It returns the pair (root, -dx).
-  auto do_bisection = [&x_upper, &x_lower]() {
-    const double dx_negative = 0.5 * (x_lower - x_upper);
+  auto do_bisection = [&bracket]() {
+    const double dx_negative = 0.5 * (bracket.x_lower() - bracket.x_upper());
     // N.B. This way of updating the root will lead to root == x_lower if
     // the value of minus_dx is insignificant compared to x_lower when using
     // floating point precision. This fact is used in the termination check
     // below to exit whenever a user specifies abs_tolerance = 0.
-    const double x = x_lower - dx_negative;
+    const double x = bracket.x_lower() - dx_negative;
     return std::make_pair(x, dx_negative);
   };
 
@@ -69,7 +61,7 @@ std::pair<double, int> DoNewtonWithBisectionFallback(
     return std::make_pair(x, dx_negative);
   };
 
-  for (int num_evaluations = 3; num_evaluations <= max_iterations;
+  for (int num_evaluations = 1; num_evaluations <= max_iterations;
        ++num_evaluations) {
     // N.B. Notice this check is always true for df = 0 (and f != 0 since we
     // ruled that case out above). Therefore Newton is only called when df != 0,
@@ -91,12 +83,11 @@ std::pair<double, int> DoNewtonWithBisectionFallback(
       DRAKE_LOGGER_DEBUG("Bisect. k = {:d}.", num_evaluations);
     } else {
       std::tie(root, minus_dx) = do_newton();
-      const bool outside_bracket = root < x_lower || root > x_upper;
-      if (outside_bracket) {
+      if (bracket.inside(root)) {
+        DRAKE_LOGGER_DEBUG("Newton. k = {:d}.", num_evaluations);
+      } else {
         std::tie(root, minus_dx) = do_bisection();
         DRAKE_LOGGER_DEBUG("Bisect. k = {:d}.", num_evaluations);
-      } else {
-        DRAKE_LOGGER_DEBUG("Newton. k = {:d}.", num_evaluations);
       }
     }    
 
@@ -116,13 +107,7 @@ std::pair<double, int> DoNewtonWithBisectionFallback(
 
     // Update the bracket around root to guarantee that there exist a root
     // within the interval [x_lower, x_upper].
-    if (f * f_upper < 0.0) {
-      x_lower = root;
-      f_lower = f;
-    } else {
-      x_upper = root;
-      f_upper = f;
-    }
+    bracket.Update(root, f);
   }
 
   // If here, then DoNewtonWithBisectionFallback did not converge.
@@ -131,7 +116,7 @@ std::pair<double, int> DoNewtonWithBisectionFallback(
   throw std::runtime_error(
       fmt::format("NewtonWithBisectionFallback did not converge.\n"
                   "|dx| = {}. |x_upper - x_lower| = {}",
-                  abs(minus_dx), abs(x_upper - x_lower)));
+                  abs(minus_dx), abs(bracket.x_upper() - bracket.x_lower())));
 }
 
 }  // namespace internal
