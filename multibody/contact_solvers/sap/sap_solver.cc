@@ -591,7 +591,7 @@ std::pair<double, int> SapSolver<double>::PerformExactLineSearch(
                         parameters_.ls_alpha_max, scratch, &dell, &d2ell);
   // If the cost keeps decreasing at alpha_max, then alpha = alpha_max is a good
   // step size.                        
-  if (dell < 0) return std::make_pair(parameters_.ls_alpha_max, 0);
+  if (dell <= 0) return std::make_pair(parameters_.ls_alpha_max, 0);
 
   const double kTolerance = 50 * std::numeric_limits<double>::epsilon();
   // N.B. We expect ell_scale != 0 since otherwise SAP's optimality condition
@@ -663,10 +663,15 @@ std::pair<double, int> SapSolver<double>::PerformExactLineSearch(
   // The most likely solution close to the optimal solution.
   const double alpha_guess = 1.0;
 
+  // N.B. If we are here, then we already know that dell_dalpha0 < 0 and dell >
+  // 0, and therefore [0, alpha_max] is a valid bracket. Otherwise we would've
+  // already returned or thrown an exception due to numerical errors.
+  const Bracket bracket(0., dell_dalpha0 / ell_scale, parameters_.ls_alpha_max,
+                  dell / ell_scale);
+
   //std::cout << "Calling DoNewtonWithBisectionFallback():\n";
   const auto [alpha, num_iters] = DoNewtonWithBisectionFallback(
-      cost_and_gradient, 0., parameters_.ls_alpha_max, alpha_guess, kTolerance,
-      100);
+      cost_and_gradient, bracket, alpha_guess, kTolerance, 100);
   //std::cout << std::endl;      
 
   return std::make_pair(alpha, num_iters);
