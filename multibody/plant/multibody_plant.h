@@ -1360,6 +1360,21 @@ class MultibodyPlant : public internal::MultibodyTreeSystem<T> {
     }
     return it->second;
   }
+
+  /// If the provided body belongs to the called plant, its index is returned.
+  /// Otherwise nullopt is returned.
+  std::optional<BodyIndex> GetIndexOfBodyIfExists(const Body<T>& body) const {
+    for (BodyIndex ii(0); ii < multibody_graph_.num_bodies(); ++ii) {
+      auto& graph_body = multibody_graph_.get_body(ii);
+      if (graph_body.name() == body.name() &&
+          graph_body.index() == body.index() &&
+          graph_body.model_instance() == body.model_instance()) {
+        return ii;
+      }
+    }
+    return {};
+  }
+
   /// @} <!-- Geometry -->
 
   /// @anchor mbp_contact_modeling
